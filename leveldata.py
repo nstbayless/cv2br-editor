@@ -19,6 +19,7 @@ Entities = {
     0x04: "ITM_WHIP_FIRE",
     0x05: "ITM_HEARTSMALL",
     0x06: "ITM_HEARTBIG",
+    0x0F: "ENM_PANAGUCHI_0F",
     
     0x08: "WALL_1UP",
     0x09: "ENM_RAT_09",
@@ -28,28 +29,31 @@ Entities = {
     0x0D: "ENM_PANAGUCHI_0D",
     0x0E: "ENM_RAT_0E",
     
-    0x1F: "ENM_BAT_1F",
+    0x1C: "ENM_SKELETON_1C",
+    0x1E: "ENM_FORNEUS",
     0x1F: "ENM_BAT_1F",
     
-    0x22: "BOSS_22",
-    
+    0x20: "ENM_SKELETON_20",
+    0x21: "ENM_MUDMAN",
+    0x22: "BOSS_TWIN_TRIDENT",
+    0x24: "BG_ANIM",
     0x25: "SPAWNEYE_RIGHT",
     0x26: "SPAWNEYE_LEFT",
     
+    0x33: "ENM_KNIGHT",
     0x34: "ENM_RAVEN",
     0x35: "ITM_WHIP_CHAIN",
-    
+    0x37: "ENM_WATER_CREEP",
     0x3C: "SPAWNEYE_ABOVE",
     
     0x41: "ENM_DAGGER",
-    
-    0x45: "BOSS_55",
-    
+    0x45: "BOSS_DARKSIDE",
     0x4E: "BGFLAME",
     
     0x53: "BOSS_ANGEL_MUMMY",
+    0x5D: "ENM_BEATLE",
     
-    0x60: "BOSS_60",
+    0x60: "BOSS_IRON_DOLL",
     
     0x69: "BOSS_BONE_SERPENT",
     
@@ -57,13 +61,12 @@ Entities = {
     0x73: "BOSS_DRACULA",
 }
 
-if len(sys.argv) < 3:
-    print(f"usage: {sys.argv[0]} romfile out.asm")
-    print(f"  e.g.: {sys.argv[0]} base-us.gb out.asm")
+if len(sys.argv) < 2:
+    print(f"usage: {sys.argv[0]} romfile.gb")
     sys.exit()
 
 romfile = sys.argv[1]
-outfile = sys.argv[2]
+outfile = "leveldata.asm"
     
 with open(romfile, "rb") as f:
     data = f.read()
@@ -107,7 +110,7 @@ def read_substage_data(level, substage, bank, addr, out):
                 id = readbyte(bank, addr+1)
                 x = readbyte(bank, addr+2)
                 y = readbyte(bank, addr+3)
-                out(f"{I}db           SLOT{slot:x}, {idname(id) + ',': <20} ${x:02x}, ${y:02x}")
+                out(f"{I}db           SLOT{slot:x}, {idname(id) + ',': <22} ${x:02x}, ${y:02x}")
                 addr += 4
         if b == 0xFD:
             addr += 1
@@ -115,13 +118,13 @@ def read_substage_data(level, substage, bank, addr, out):
             break
         else:
             while readbyte(bank, addr) < 0xFD:
-                a = readbyte(bank, addr+0)
+                a = readbyte(bank, addr+0) # which screen in this room it appears at
                 b = readbyte(bank, addr+1)
                 slot = readbyte(bank, addr+2)
                 id = readbyte(bank, addr+3)
                 x = readbyte(bank, addr+4)
                 y = readbyte(bank, addr+5)
-                out(f"{I}db ${a:02x}, ${b:02x}, SLOT{slot:x}, {idname(id) + ',': <20} ${x:02x}, ${y:02x}")
+                out(f"{I}db ${a:02x}, ${b:02x}, SLOT{slot:x}, {idname(id) + ',': <22} ${x:02x}, ${y:02x}")
                 addr += 6
 
 
@@ -140,23 +143,38 @@ ENDROOMS: macro
     db $FD
 endm
 """)
+    # macro definitions
     for id in Entities:
         write(f"ENT_{Entities[id]+':': <20} equ ${id:02x}")
-    write("")
-    for i in range(4):
+    for i in range(8):
         write(f"SLOT{i}: equ ${i:02x}")
-    for i, level in enumerate(LEVELS):
-        if level:
-            print(f"Decoding {level}")
-            stagetable_C = readword(BANK, LEVTAB_C + 2*i)
-            print(f"{level} entity table C: {stagetable_C:02x}")
-            for substage in range(SUBSTAGECOUNT[i]):
-                write("")
-                substagetable_C = readword(BANK, stagetable_C + 2*substage)
-                substagetable_C_Next = readword(BANK, stagetable_C + 2*substage + 2)
-                print(f"{level}-{substage} entity table C: {substagetable_C:02x}")
-                write(f"org ${substagetable_C:04x}")
-                write(f"banksk{BANK}")
-                write(f"Lvl{level}_{substage}_Items:")
-                read_substage_data(level, substage, BANK, substagetable_C, write)
-                
+    
+    for table_addr, table_name in [(LEVTAB_A, "Misc"), (LEVTAB_B, "Enemies"), (LEVTAB_C, "Items")]:
+        write("")
+        write(f"""
+org ${table_addr:04X}
+banksk{BANK}
+table_level_{table_name}:""")
+        
+        leveldata = [""]
+        leveltables = ""
+        def writeld(s):
+            leveldata[0] += s + "\n"
+        for i, level in enumerate(LEVELS):
+            stagetable_C = readword(BANK, table_addr + 2*i)
+            if not level:
+                write(f"    dw Plant_{table_name} ; spurious entry")
+            else:
+                write(f"    dw {level}_{table_name}")
+                leveltables += f"\n{level}_{table_name}:\n"
+                for substage in range(SUBSTAGECOUNT[i]):
+                    writeld("")
+                    substagetable_C = readword(BANK, stagetable_C + 2*substage)
+                    leveltables += f"    dw Lvl{level}_{substage}_{table_name}\n"
+                    
+                    writeld(f"Lvl{level}_{substage}_{table_name}:")
+                    writeld(f";   screen,   b,  slot, entity,                  x,   y")
+                    read_substage_data(level, substage, BANK, substagetable_C, writeld)
+        
+        write(leveltables)
+        write(leveldata[0])

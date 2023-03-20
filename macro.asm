@@ -1,4 +1,5 @@
 ; call bank after org, seeks to $ in given bank.
+
 banksk:  macro n
     seek n ? (n - 1) * $4000 + $ : $
 endm

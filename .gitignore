@@ -1,3 +1,7 @@
 *.asm
 *.gb
 !macro.asm
+*.bin
+!game.asm
+*.lbl
+*.sn*
