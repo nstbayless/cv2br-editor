@@ -14,9 +14,45 @@ def readtableword(bank, addr, arg0, *args):
         addr = readword(bank, addr + 2*i)
     return addr
     
-# returns startx, starty, then a 16x16 array of screen bytes
+def readtablebyte(bank, addr, arg0, *args):
+    args = [arg0] + list(args)
+    if len(args) > 1:
+        addr = readtableword(bank, addr, *args[:-1])
+    return readbyte(bank, addr + args[-1])
+    
+# returns startx, starty, scrolldir, then a 16x16 array of screen bytes
 def produce_sublevel_screen_arrangement(level, sublevel):
-    pass
+    scrolldir = readtablebyte(BANK2, LEVEL_SCROLLDIR_TABLE, level, sublevel)
+    screenbuffaddr = readtableword(BANK6, LEVEL_SCREEN_TABLE, level, sublevel)
+    startx = readbyte(BANK6, screenbuffaddr)
+    starty = readbyte(BANK6, screenbuffaddr+1)
+    screenbuffaddr += 2
+    buff = [[0 for j in range(16)] for i in range(16)]
+    while True:
+        dst = readword(BANK6, screenbuffaddr)
+        x=dst%0x10
+        y=(dst//0x10)%0x10
+        screenbuffaddr += 2
+        stride = readbyte(BANK6, screenbuffaddr)
+        xstride = stride % 0x10
+        if xstride >= 0x8:
+            xstride -= 0x10
+        ystride = stride // 0x10
+        if ystride >= 0x8:
+            ystride -= 0x8
+        screenbuffaddr += 1
+        while True:
+            header = readbyte(BANK6, screenbuffaddr)
+            screenbuffaddr += 1
+            if header == 0xff:
+                return startx, starty, scrolldir, buff
+            elif header == 0xfe:
+                break
+            assert x >= 0 and x < 0x10, f"{x},{y},{LEVELS[level]}-{sublevel} :{startx},{starty} +{xstride}x"
+            assert y >= 0 and y < 0x10, f"{x},{y},{LEVELS[level]}-{sublevel} :{startx},{starty} +{ystride}y"
+            buff[x][y] = header
+            x += xstride
+            y += ystride
 
 def get_entry_end(table, bank, level, substage=None, drac3_size=None):
     if drac3_size is None:

@@ -4,8 +4,6 @@ import rom
 from rom import readword, readbyte, readtableword
 from PIL import Image
 
-MARGIN = 2
-MARGINCOL = (0x80, 0x00, 0x20)
 PALETTE = [
     (0xff, 0xff, 0xff),
     (0xb0, 0xb0, 0xb0),
@@ -16,6 +14,32 @@ PALETTE = [
 if len(sys.argv) != 3:
     print(f"usage: {sys.argv[0]} base.gb out/")
     sys.exit(1)
+    
+def ghosttint(r, g, b):
+    return (r//2, g//2, int(b/1.5))
+
+def pasteScreen(out, i, tchunks, x, y, ghostly):
+    for t, chidx in enumerate(tchunks):
+        sx = t % 5
+        sy = t // 5
+        chunk = get_tile_chunk(chidx, i)
+        
+        #iterate over tiles
+        for k, c in enumerate(chunk):
+            cx = k % 4
+            cy = k // 4
+            xdraw = ((sx * 4) + cx) * 8
+            ydraw = (sy * 4 + cy) * 8
+            
+            img = get_tile_img(c, i)
+            if ghostly:
+                pixels = out.load()
+                pix2 = img.load()
+                for _x in range(8):
+                    for _y in range(8):
+                        pixels[x+xdraw+_x, y+ydraw+_y] = ghosttint(*pix2[_x,_y])
+            else:
+                out.paste(img, (x+xdraw, y+ydraw))
 
 with open(sys.argv[1], "rb") as f:
     rom.readrom(f.read())
@@ -39,7 +63,26 @@ def load_vram_metabuffer(bank, addr):
         srcaddr = rom.readword(bank, addr)
         addr += 2
         load_vram_buffer(destaddr, destlen, srcbank, srcaddr)
-
+    
+def get_screensbuff_boundingbox(arr):
+    # this function implemented by ChatGPT
+    min_row = len(arr)
+    min_col = len(arr[0])
+    max_row = -1
+    max_col = -1
+    for i in range(len(arr)):
+        for j in range(len(arr[i])):
+            if arr[i][j] != 0:
+                if i < min_row:
+                    min_row = i
+                if j < min_col:
+                    min_col = j
+                if i > max_row:
+                    max_row = i
+                if j > max_col:
+                    max_col = j
+    return min_row, max_row+1, min_col, max_col+1,
+     
 def get_tile_chunk(id, level):
     if id == 0:
         return [0] * 16
@@ -81,35 +124,40 @@ for i, level in enumerate(rom.LEVELS):
     buffaddr = readtableword(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_TABLE, i)
     load_vram_metabuffer(rom.LEVEL_TILESET_TABLE_BANK, buffaddr)
     
-    outvram = Image.new(mode="RGB", size=(8*16,8*32))
-    for t in range(0x80):
-        tx = t % 0x10
-        ty = t // 0x10
-        
-    
     for sublevel in range(rom.SUBSTAGECOUNT[i]):
+        
+        x, y, d, table = rom.produce_sublevel_screen_arrangement(i, sublevel)
+        table_x0, table_x1, table_y0, table_y1 = get_screensbuff_boundingbox(table)
+        
+        # print level screens:
+        if False:
+            print("table:")
+            for yi in range(table_y0, table_y1):
+                s = ""
+                for xi in range(table_x0, table_x1):
+                    if table[xi][yi] != 0:
+                        s += f" {table[xi][yi]:02X}"
+                    else:
+                        s += "   "
+                print(s)
+        
         tiles_begin = readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, i, sublevel)
         tiles_end = rom.get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, sublevel)
         assert tiles_end > tiles_begin
         assert (tiles_begin - tiles_end) % 20 == 0
         screenc = (tiles_end - tiles_begin) // 20
-        out = Image.new(mode="RGB", color=MARGINCOL, size=(8 * 5 * 4 * screenc + MARGIN*(screenc-1), 4 * 4 * 8))
+        out = Image.new(mode="RGB", size=(8 * 5 * 4 * (table_x1 - table_x0), 4 * 4 * 8 * (table_y1 - table_y0)))
+        
+        # iterate over screens:
+        for yi in range(table_y0, table_y1):
+            for xi in range(table_x0, table_x1):
+                te = table[xi][yi]
+                if te != 0:
+                    screen = te & 0x0F
+                    tilechunks = [readbyte(rom.BANK6, tiles_begin + 20*screen + r) for r in range(20)]
+                    pasteScreen(out, i, tilechunks, (xi-table_x0)*8*5*4, (yi-table_y0)*4*8*4, screen >= screenc)
         
         # iterate over 4x4 tile chunks
-        for t in range(0, screenc * 20):
-            screen = t // 20
-            st = t % 20
-            sx = st % 5
-            sy = st // 5
-            chidx = rom.readbyte(rom.BANK6, tiles_begin + t)
-            chunk = get_tile_chunk(chidx, i)
-            
-            #iterate over tiles
-            for k, c in enumerate(chunk):
-                cx = k % 4
-                cy = k // 4
-                xdraw = ((((screen * 5) + sx) * 4) + cx) * 8 + screen*MARGIN
-                ydraw = (sy * 4 + cy) * 8
-                out.paste(get_tile_img(c, i), (xdraw, ydraw))
+        
         
         out.save(os.path.join(dir, f"{level}_{sublevel}.png"))
