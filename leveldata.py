@@ -117,9 +117,11 @@ with open("leveldata.asm", "w") as f:
     write(f"banksk{rom.LEVEL_TILESET_TABLE_BANK:X}")
     write("level_tileset_table:")
     for i, level in enumerate(rom.LEVELS):
-        levelname = level if level else "spurious entry"
         addr = rom.readtableword(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_TABLE, i)
-        write(f"    dw ${addr:04X} ; {levelname}")
+        if level is not None:
+            write(f"    dw ${addr:04X} ; {level}")
+        else:
+            write(f"    dw ${addr:04X}")
 
     write("")
     write(f"org ${rom.TILES4x4_BEGIN:04X}")

@@ -13,6 +13,10 @@ def readtableword(bank, addr, arg0, *args):
     for i in [arg0] + list(args):
         addr = readword(bank, addr + 2*i)
     return addr
+    
+# returns startx, starty, then a 16x16 array of screen bytes
+def produce_sublevel_screen_arrangement(level, sublevel):
+    pass
 
 def get_entry_end(table, bank, level, substage=None, drac3_size=None):
     if drac3_size is None:
@@ -77,15 +81,23 @@ def readrom(_data):
     global LEVEL_TILESET_TABLE_BANK
     LEVEL_TILESET_TABLE_BANK = 0
     LEVEL_TILESET_TABLE = 0x2e06
-
+    global LEVEL_SCROLLDIR_TABLE
+    LEVEL_SCROLLDIR_TABLE = 0x4320
+    
+    # bank3
     global BANK
     BANK = 3
-    
     global LEVTAB_ROUTINE
     LEVTAB_ROUTINE = 0x6cc7
 
+    # bank6
     global BANK6
     BANK6 = 6
+    global LEVEL_SCREEN_TABLE
+    LEVEL_SCREEN_TABLE = 0x5020
+    
+    if ROMTYPE == "jp":
+        LEVEL_SCREEN_TABLE = 0x4fb0
 
     if ROMTYPE == "kgbc4eu":
         BANK2 = 0x12
@@ -93,10 +105,12 @@ def readrom(_data):
         BANK6 = 0x16
         LEVTAB_TILES4x4_BANK2 += 75
         LEVTAB_TILES_BANK2 += 75
+        LEVEL_SCROLLDIR_TABLE += 75
         TILES4x4_BEGIN = 0x4560
         LEVTAB_ROUTINE = 0x70af
         LEVEL_TILESET_TABLE = 0x5A15
         LEVEL_TILESET_TABLE_BANK = 0x16
+        LEVEL_SCREEN_TABLE = 0x50C8
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
