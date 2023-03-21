@@ -1,7 +1,6 @@
 # Castlevania II: Belmont's Revenge (data extraction)
 
-This repository provides a script (`build.sh`) which can be run to extract some
-of the data from a ROM of *Castlevania II: Belmont's Revenge*, such as the level objects and tiles.
+This repository provides a script (`build.sh`) which can be run to extract some of the data from a ROM of *Castlevania II: Belmont's Revenge*, such as the level objects and tiles. If you don't have a bash interpreter and aren't able to run .sh files, you can instead run the python script directly.
 
 Supported roms: us/eu, jp, kgb4ceu
 
