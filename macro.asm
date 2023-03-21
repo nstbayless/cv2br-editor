@@ -12,6 +12,10 @@ banksk1: macro
     seek $4000 * (1-1) + $
 endm
 
+banksk2: macro
+    seek $4000 * (2-1) + $
+endm
+
 banksk3: macro
     seek $4000 * (3-1) + $
 endm

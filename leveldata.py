@@ -3,14 +3,22 @@
 import enum
 import sys
 
+def array_to_hx(a):
+    return ", ".join(list(map(lambda x: f"${x:02X}", a)))
+
+# bank2
+LEVTAB_TILES4x4_BANK2 = 0x42a5
+LEVTAB_TILES_BANK2 = 0x42C4
+TILES4x4_BEGIN = 0x44c0
+
 BANK = 3
 LEVTAB_A = 0x5242 # goes to D240
 LEVTAB_B = 0x58AC # goes to D440
 LEVTAB_C = 0x5D25 # goes to D640
 
-
 LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
 SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]
+
 Entities = {
     0x00: "NONE",
     0x01: "ITM_CROSSAXE",
@@ -66,7 +74,6 @@ if len(sys.argv) < 2:
     sys.exit()
 
 romfile = sys.argv[1]
-outfile = "leveldata.asm"
     
 with open(romfile, "rb") as f:
     data = f.read()
@@ -96,6 +103,29 @@ def idname(id):
 
 I = "    "
 
+def get_entry_end(table, bank, level, substage, drac3_size):
+    if substage is not None:
+        substage += 1
+        if substage >= SUBSTAGECOUNT[level]:
+            substage = 0
+            level += 1
+        if level >= len(SUBSTAGECOUNT):
+            level = len(SUBSTAGECOUNT) - 1
+            substage = SUBSTAGECOUNT[level] - 1
+        else:
+            drac3_size = 0
+    else:
+        level += 1
+        if level >= len(SUBSTAGECOUNT):
+            level -= 1
+        else:
+            drac3_size = 0
+        
+    addr2 = readword(bank, table + 2*level)
+    if substage is not None:
+        addr2 = readword(bank, addr2 + 2*substage)
+    return addr2 + drac3_size
+    
 def read_substage_data(level, substage, bank, addr, out):
     while True:
         b = readbyte(bank, addr)
@@ -127,8 +157,98 @@ def read_substage_data(level, substage, bank, addr, out):
                 out(f"{I}db ${a:02x}, ${b:02x}, SLOT{slot:x}, {idname(id) + ',': <22} ${x:02x}, ${y:02x}")
                 addr += 6
 
+with open("leveldata.asm", "w") as f:
+    def write(t):
+        f.write(t)
+        f.write("\n")
+    
+    write(f"org ${LEVTAB_TILES4x4_BANK2:04X}")
+    write("banksk2")
+    write("level_tile_chunks_table:")
+    for i, level in enumerate(LEVELS):
+        if level is None:
+            write(f"    dw Plant_Tile_Chunks ; spurious entry")
+        else:
+            write(f"    dw {level}_Tile_Chunks")
+    
+    write("")
+    write(f"org ${LEVTAB_TILES_BANK2:04X}")
+    write("banksk2")
+    write("level_tiles_table:")
+    for i, level in enumerate(LEVELS):
+        if level is None:
+            write(f"    dw Plant_Tiles ; spurious entry")
+        else:
+            write(f"    dw {level}_Tiles")
+            
+    tiles_s = [""]
+    def writeti(s):
+        tiles_s[0] += s + "\n"
+    First = True
+    tilechunkmaxid = [0 for l in LEVELS]
+    for i, level in enumerate(LEVELS):
+        if level is not None:
+            write("")
+            addr = readword(2, LEVTAB_TILES_BANK2 + i*2)
+            write(f"org ${addr:04X}")
+            write(f"banksk2")
+            write(f"{level}_Tiles:")
+            for substage in range(SUBSTAGECOUNT[i]):
+                addr2 = readword(2, addr + substage*2)
+                write(f"    dw {level}_{substage}_Tiles")
+                writeti("")
+                if First:
+                    writeti(f"org ${addr2:04X}")
+                    writeti("banksk6")
+                    First = False
+                writeti(f"{level}_{substage}_Tiles:")
+                tiles = get_entry_end(LEVTAB_TILES_BANK2, 2, i, substage, 5*20) - addr2
+                assert tiles > 0
+                assert tiles % 20 == 0
+                for t in range(tiles//5):
+                    if t % 4 == 0:
+                        writeti(f"    ; screen {t//4}")
+                    rowdata = [readbyte(6, addr2 + t*5 + i) for i in range(5)]
+                    writeti("    db " +array_to_hx(rowdata))
+                    lvi = i if level != "Drac3" else i-1
+                    tilechunkmaxid[lvi] = max([tilechunkmaxid[lvi]] + rowdata)
 
-with open(outfile, "w") as f:
+    write("")
+    write(f"org ${TILES4x4_BEGIN:04X}")
+    write("banksk2")
+    write(f" ds $10, $0 ; blank 4x4 tile chunk")
+    
+    for i, level in enumerate(LEVELS):
+        if level in [None, "Drac3"]:
+            continue
+        addr = readword(2, LEVTAB_TILES4x4_BANK2 + 2*i)
+        write("")
+        #write(f"org ${addr:04X}")
+        #write(f"banksk2")
+        write(f"{level}_Tile_Chunks:")
+        if level == "Drac2":
+            write(f"Drac3_Tile_Chunks:")
+            tilec = 0x6500 + 0x82 * 0x10 - addr
+        else:
+            #tilec = (tilechunkmaxid[i]-3) * 0x10 #
+            tilec = get_entry_end(LEVTAB_TILES4x4_BANK2, 2, i, None, None) - addr
+        assert tilec % 0x10 == 0
+        
+        for i in range(1, tilec//0x10+1):
+            s = "    db"
+            first = True
+            for j in range(0x10):
+                a = readbyte(2, addr + (i-1) * 0x10 + j)
+                if first:
+                    first = False
+                else:
+                    s += ","
+                s += f" ${a:02x}"
+            write(f"{s}   ; tile ${i:02X}")
+        
+    write(tiles_s[0])
+
+with open("levelobjects.asm", "w") as f:
     def write(t):
         f.write(t)
         f.write("\n")

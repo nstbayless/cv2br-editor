@@ -1,7 +1,7 @@
 # Castlevania II: Belmont's Revenge (data extraction)
 
 This repository provides a script (`build.sh`) which can be run to extract some
-of the data from a US/EU ROM of *Castlevania II: Belmont's Revenge*, such as the lantern data.
+of the data from a US/EU ROM of *Castlevania II: Belmont's Revenge*, such as the level objects and tiles.
 
 python3.8 is requied to run the script.
 

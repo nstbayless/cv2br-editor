@@ -20,5 +20,11 @@ python3 ./leveldata.py $BASE.gb
 
 BUILDNAME="$BASE.out.gb"
 echo "incbin \"$BASE.gb\"" > incbase.asm
-z80asm -o $BUILDNAME --label=$BASE.out.lbl -i incbase.asm ./game.asm
-diff "$BASE.gb" "$BUILDNAME"
+
+if command -v z80asm > /dev/null
+then
+    z80asm -o $BUILDNAME --label=$BASE.out.lbl -i incbase.asm ./game.asm
+    diff "$BASE.gb" "$BUILDNAME"
+else
+    echo "Install z80asm (ubuntu: apt install z80asm) to build the extracted data as a patch"
+fi
