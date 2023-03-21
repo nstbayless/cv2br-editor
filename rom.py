@@ -9,6 +9,39 @@ def readbyte(bank, addr):
 def readword(bank, addr):
     return readbyte(bank, addr) + 0x100 * readbyte(bank, addr+1)
 
+def readtableword(bank, addr, arg0, *args):
+    for i in [arg0] + list(args):
+        addr = readword(bank, addr + 2*i)
+    return addr
+
+def get_entry_end(table, bank, level, substage=None, drac3_size=None):
+    if drac3_size is None:
+        if table == LEVTAB_TILES_BANK2 and bank == BANK2:
+            drac3_size = 5*20 # this is a guess
+        if table == LEVTAB_TILES4x4_BANK2 and bank == BANK2:
+            drac3_size = 0x820 # this is a guess
+    if substage is not None:
+        substage += 1
+        if substage >= SUBSTAGECOUNT[level]:
+            substage = 0
+            level += 1
+        if level >= len(SUBSTAGECOUNT):
+            level = len(SUBSTAGECOUNT) - 1
+            substage = SUBSTAGECOUNT[level] - 1
+        else:
+            drac3_size = 0
+    else:
+        level += 1
+        if level >= len(SUBSTAGECOUNT):
+            level -= 1
+        else:
+            drac3_size = 0
+        
+    addr2 = readword(bank, table + 2*level)
+    if substage is not None:
+        addr2 = readword(bank, addr2 + 2*substage)
+    return addr2 + drac3_size
+
 def readrom(_data):
     global data
     data = _data
@@ -16,8 +49,6 @@ def readrom(_data):
     if not data or len(data) <= 100:
         print(f"romfile invalid?")
         sys.exit(1)
-    else:
-        print(f"romfile has 0x{len(data):02x} bytes")
     
     global ROMTYPE
 
@@ -42,6 +73,10 @@ def readrom(_data):
     LEVTAB_TILES_BANK2 = 0x42C4
     global TILES4x4_BEGIN
     TILES4x4_BEGIN = 0x44c0
+    global LEVEL_TILESET_TABLE
+    global LEVEL_TILESET_TABLE_BANK
+    LEVEL_TILESET_TABLE_BANK = 0
+    LEVEL_TILESET_TABLE = 0x2e06
 
     global BANK
     BANK = 3
@@ -60,6 +95,8 @@ def readrom(_data):
         LEVTAB_TILES_BANK2 += 75
         TILES4x4_BEGIN = 0x4560
         LEVTAB_ROUTINE = 0x70af
+        LEVEL_TILESET_TABLE = 0x5A15
+        LEVEL_TILESET_TABLE_BANK = 0x16
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
@@ -119,6 +156,7 @@ def readrom(_data):
         0x73: "BOSS_DRACULA",
     }
 
+"""
 ROMTYPE = "us"
 BANK2 = 2
 LEVTAB_TILES4x4_BANK2 = 0
@@ -135,3 +173,4 @@ LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
 SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]
 
 Entities = {}
+"""

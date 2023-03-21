@@ -21,31 +21,8 @@ def idname(id):
         return "ENT_" + rom.Entities[id]
     else:
         return f"${id:02x}"
-
-I = "    "
-
-def get_entry_end(table, bank, level, substage, drac3_size):
-    if substage is not None:
-        substage += 1
-        if substage >= rom.SUBSTAGECOUNT[level]:
-            substage = 0
-            level += 1
-        if level >= len(rom.SUBSTAGECOUNT):
-            level = len(rom.SUBSTAGECOUNT) - 1
-            substage = rom.SUBSTAGECOUNT[level] - 1
-        else:
-            drac3_size = 0
-    else:
-        level += 1
-        if level >= len(rom.SUBSTAGECOUNT):
-            level -= 1
-        else:
-            drac3_size = 0
-        
-    addr2 = readword(bank, table + 2*level)
-    if substage is not None:
-        addr2 = readword(bank, addr2 + 2*substage)
-    return addr2 + drac3_size
+    
+I = " " * 4
     
 def read_substage_data(level, substage, bank, addr, out):
     while True:
@@ -122,7 +99,7 @@ with open("leveldata.asm", "w") as f:
                     writeti(f"banksk{rom.BANK6:X}")
                     First = False
                 writeti(f"{level}_{substage}_Tiles:")
-                tiles = get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, substage, 5*20) - addr2
+                tiles = rom.get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, substage) - addr2
                 if tiles <= 0:
                     breakpoint()
                 assert tiles > 0
@@ -134,6 +111,15 @@ with open("leveldata.asm", "w") as f:
                     writeti("    db " +array_to_hx(rowdata))
                     lvi = i if level != "Drac3" else i-1
                     tilechunkmaxid[lvi] = max([tilechunkmaxid[lvi]] + rowdata)
+
+    write("")
+    write(f"org ${rom.LEVEL_TILESET_TABLE:04X}")
+    write(f"banksk{rom.LEVEL_TILESET_TABLE_BANK:X}")
+    write("level_tileset_table:")
+    for i, level in enumerate(rom.LEVELS):
+        levelname = level if level else "spurious entry"
+        addr = rom.readtableword(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_TABLE, i)
+        write(f"    dw ${addr:04X} ; {levelname}")
 
     write("")
     write(f"org ${rom.TILES4x4_BEGIN:04X}")
@@ -153,7 +139,7 @@ with open("leveldata.asm", "w") as f:
             tilec = 0x82 * 0x10 # this is a guess
         else:
             #tilec = (tilechunkmaxid[i]-3) * 0x10 #
-            tilec = get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, i, None, None) - addr
+            tilec = rom.get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, i) - addr
         assert tilec % 0x10 == 0
         
         for i in range(1, tilec//0x10+1):
