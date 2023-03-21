@@ -32,6 +32,14 @@ banksk7: macro
     seek $4000 * (7-1) + $
 endm
 
+banksk12: macro
+    seek $4000 * (0x12-1) + $
+endm
+
+banksk13: macro
+    seek $4000 * (0x13-1) + $
+endm
+
 banksk16: macro
     seek $4000 * (0x16-1) + $
 endm
