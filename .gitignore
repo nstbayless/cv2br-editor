@@ -5,3 +5,4 @@
 !game.asm
 *.lbl
 *.sn*
+__pycache__

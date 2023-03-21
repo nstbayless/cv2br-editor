@@ -2,127 +2,23 @@
 
 import enum
 import sys
+import rom
+from rom import readword, readbyte
 
 def array_to_hx(a):
     return ", ".join(list(map(lambda x: f"${x:02X}", a)))
 
-romfile = sys.argv[1]
-    
-with open(romfile, "rb") as f:
-    data = f.read()
-
-def romaddr(bank, addr):
-    return bank * 0x4000 + addr % 0x4000
-    
-def readbyte(bank, addr):
-    return data[romaddr(bank, addr)]
-    
-def readword(bank, addr):
-    return readbyte(bank, addr) + 0x100 * readbyte(bank, addr+1)
-
-if not data or len(data) <= 100:
-    print(f"romfile {romfile} invalid?")
-    sys.exit(1)
-else:
-    print(f"romfile has 0x{len(data):02x} bytes")
-
-# determine which rom this is from header
-ROMTYPE = "unk"
-if data[0x14B] == 0xA4 and data[0x134] == 0x43:
-    ROMTYPE = "us"
-elif data[0x14B] == 0xA4 and data[0x134] == 0x44:
-    ROMTYPE = "jp"
-elif data[0x14B] == 0x33 and data[0x13C] == 0x34:
-    ROMTYPE = "kgbc4eu"
-else:
-    print("Unrecognized ROM. Please check the hash. Supported roms: us/ue, jp, kgbc4eu")
-    sys.exit(1)
-
-# bank2
-BANK2 = 2
-LEVTAB_TILES4x4_BANK2 = 0x42a5
-LEVTAB_TILES_BANK2 = 0x42C4
-TILES4x4_BEGIN = 0x44c0
-
-BANK = 3
-LEVTAB_ROUTINE = 0x6cc7
-
-BANK6 = 6
-
-if ROMTYPE == "kgbc4eu":
-    BANK2 = 0x12
-    BANK = 0x13
-    BANK6 = 0x16
-    LEVTAB_TILES4x4_BANK2 += 75
-    LEVTAB_TILES_BANK2 += 75
-    TILES4x4_BEGIN = 0x4560
-    LEVTAB_ROUTINE = 0x70af
-
-LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
-LEVTAB_B = readword(BANK, LEVTAB_ROUTINE + 13)
-LEVTAB_C = readword(BANK, LEVTAB_ROUTINE + 22)
-
-LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
-SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]
-
-Entities = {
-    0x00: "NONE",
-    0x01: "ITM_CROSSAXE",
-    0x02: "ITM_HOLYWATER",
-    0x03: "ITM_COIN",
-    0x04: "ITM_WHIP_FIRE",
-    0x05: "ITM_HEARTSMALL",
-    0x06: "ITM_HEARTBIG",
-    0x0F: "ENM_PANAGUCHI_0F",
-    
-    0x08: "WALL_1UP",
-    0x09: "ENM_RAT_09",
-    
-    0x0B: "WALL_MEAT",
-    0x0C: "ENM_PANAGUCHI_0C",
-    0x0D: "ENM_PANAGUCHI_0D",
-    0x0E: "ENM_RAT_0E",
-    
-    0x1C: "ENM_SKELETON_1C",
-    0x1E: "ENM_FORNEUS",
-    0x1F: "ENM_BAT_1F",
-    
-    0x20: "ENM_SKELETON_20",
-    0x21: "ENM_MUDMAN",
-    0x22: "BOSS_TWIN_TRIDENT",
-    0x24: "BG_ANIM",
-    0x25: "SPAWNEYE_RIGHT",
-    0x26: "SPAWNEYE_LEFT",
-    
-    0x33: "ENM_KNIGHT",
-    0x34: "ENM_RAVEN",
-    0x35: "ITM_WHIP_CHAIN",
-    0x37: "ENM_WATER_CREEP",
-    0x3C: "SPAWNEYE_ABOVE",
-    
-    0x41: "ENM_DAGGER",
-    0x45: "BOSS_DARKSIDE",
-    0x4E: "BGFLAME",
-    
-    0x53: "BOSS_ANGEL_MUMMY",
-    0x5D: "ENM_BEATLE",
-    
-    0x60: "BOSS_IRON_DOLL",
-    
-    0x69: "BOSS_BONE_SERPENT",
-    
-    0x72: "BOSS_SOLEIL",
-    0x73: "BOSS_DRACULA",
-}
-
 if len(sys.argv) < 2:
     print(f"usage: {sys.argv[0]} romfile.gb")
     sys.exit()
+    
+with open(sys.argv[1], "rb") as f:
+    rom.readrom(f.read())
 
 ############################################################
 def idname(id):
-    if id in Entities:
-        return "ENT_" + Entities[id]
+    if id in rom.Entities:
+        return "ENT_" + rom.Entities[id]
     else:
         return f"${id:02x}"
 
@@ -131,17 +27,17 @@ I = "    "
 def get_entry_end(table, bank, level, substage, drac3_size):
     if substage is not None:
         substage += 1
-        if substage >= SUBSTAGECOUNT[level]:
+        if substage >= rom.SUBSTAGECOUNT[level]:
             substage = 0
             level += 1
-        if level >= len(SUBSTAGECOUNT):
-            level = len(SUBSTAGECOUNT) - 1
-            substage = SUBSTAGECOUNT[level] - 1
+        if level >= len(rom.SUBSTAGECOUNT):
+            level = len(rom.SUBSTAGECOUNT) - 1
+            substage = rom.SUBSTAGECOUNT[level] - 1
         else:
             drac3_size = 0
     else:
         level += 1
-        if level >= len(SUBSTAGECOUNT):
+        if level >= len(rom.SUBSTAGECOUNT):
             level -= 1
         else:
             drac3_size = 0
@@ -186,20 +82,20 @@ with open("leveldata.asm", "w") as f:
     def write(t):
         f.write(t)
         f.write("\n")    
-    write(f"org ${LEVTAB_TILES4x4_BANK2:04X}")
-    write(f"banksk{BANK2:X}")
+    write(f"org ${rom.LEVTAB_TILES4x4_BANK2:04X}")
+    write(f"banksk{rom.BANK2:X}")
     write("level_tile_chunks_table:")
-    for i, level in enumerate(LEVELS):
+    for i, level in enumerate(rom.LEVELS):
         if level is None:
             write(f"    dw Plant_Tile_Chunks ; spurious entry")
         else:
             write(f"    dw {level}_Tile_Chunks")
     
     write("")
-    write(f"org ${LEVTAB_TILES_BANK2:04X}")
-    write(f"banksk{BANK2:X}")
+    write(f"org ${rom.LEVTAB_TILES_BANK2:04X}")
+    write(f"banksk{rom.BANK2:X}")
     write("level_tiles_table:")
-    for i, level in enumerate(LEVELS):
+    for i, level in enumerate(rom.LEVELS):
         if level is None:
             write(f"    dw Plant_Tiles ; spurious entry")
         else:
@@ -209,43 +105,45 @@ with open("leveldata.asm", "w") as f:
     def writeti(s):
         tiles_s[0] += s + "\n"
     First = True
-    tilechunkmaxid = [0 for l in LEVELS]
-    for i, level in enumerate(LEVELS):
+    tilechunkmaxid = [0 for l in rom.LEVELS]
+    for i, level in enumerate(rom.LEVELS):
         if level is not None:
             write("")
-            addr = readword(BANK2, LEVTAB_TILES_BANK2 + i*2)
+            addr = readword(rom.BANK2, rom.LEVTAB_TILES_BANK2 + i*2)
             write(f"org ${addr:04X}")
-            write(f"banksk{BANK2:X}")
+            write(f"banksk{rom.BANK2:X}")
             write(f"{level}_Tiles:")
-            for substage in range(SUBSTAGECOUNT[i]):
-                addr2 = readword(BANK2, addr + substage*2)
+            for substage in range(rom.SUBSTAGECOUNT[i]):
+                addr2 = readword(rom.BANK2, addr + substage*2)
                 write(f"    dw {level}_{substage}_Tiles")
                 writeti("")
                 if First:
                     writeti(f"org ${addr2:04X}")
-                    writeti(f"banksk{BANK6:X}")
+                    writeti(f"banksk{rom.BANK6:X}")
                     First = False
                 writeti(f"{level}_{substage}_Tiles:")
-                tiles = get_entry_end(LEVTAB_TILES_BANK2, BANK2, i, substage, 5*20) - addr2
+                tiles = get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, substage, 5*20) - addr2
+                if tiles <= 0:
+                    breakpoint()
                 assert tiles > 0
                 assert tiles % 20 == 0
                 for t in range(tiles//5):
                     if t % 4 == 0:
                         writeti(f"    ; screen {t//4}")
-                    rowdata = [readbyte(BANK6, addr2 + t*5 + i) for i in range(5)]
+                    rowdata = [readbyte(rom.BANK6, addr2 + t*5 + i) for i in range(5)]
                     writeti("    db " +array_to_hx(rowdata))
                     lvi = i if level != "Drac3" else i-1
                     tilechunkmaxid[lvi] = max([tilechunkmaxid[lvi]] + rowdata)
 
     write("")
-    write(f"org ${TILES4x4_BEGIN:04X}")
-    write(f"banksk{BANK2:X}")
+    write(f"org ${rom.TILES4x4_BEGIN:04X}")
+    write(f"banksk{rom.BANK2:X}")
     write(f" ds $10, $0 ; blank 4x4 tile chunk")
     
-    for i, level in enumerate(LEVELS):
+    for i, level in enumerate(rom.LEVELS):
         if level in [None, "Drac3"]:
             continue
-        addr = readword(BANK2, LEVTAB_TILES4x4_BANK2 + 2*i)
+        addr = readword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2 + 2*i)
         write("")
         #write(f"org ${addr:04X}")
         #write(f"banksk{BANK2:X}")
@@ -255,14 +153,14 @@ with open("leveldata.asm", "w") as f:
             tilec = 0x82 * 0x10 # this is a guess
         else:
             #tilec = (tilechunkmaxid[i]-3) * 0x10 #
-            tilec = get_entry_end(LEVTAB_TILES4x4_BANK2, BANK2, i, None, None) - addr
+            tilec = get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, i, None, None) - addr
         assert tilec % 0x10 == 0
         
         for i in range(1, tilec//0x10+1):
             s = "    db"
             first = True
             for j in range(0x10):
-                a = readbyte(BANK2, addr + (i-1) * 0x10 + j)
+                a = readbyte(rom.BANK2, addr + (i-1) * 0x10 + j)
                 if first:
                     first = False
                 else:
@@ -288,37 +186,37 @@ ENDROOMS: macro
 endm
 """)
     # macro definitions
-    for id in Entities:
-        write(f"ENT_{Entities[id]+':': <20} equ ${id:02x}")
+    for id in rom.Entities:
+        write(f"ENT_{rom.Entities[id]+':': <20} equ ${id:02x}")
     for i in range(8):
         write(f"SLOT{i}: equ ${i:02x}")
     
-    for table_addr, table_name in [(LEVTAB_A, "Misc"), (LEVTAB_B, "Enemies"), (LEVTAB_C, "Items")]:
+    for table_addr, table_name in [(rom.LEVTAB_A, "Misc"), (rom.LEVTAB_B, "Enemies"), (rom.LEVTAB_C, "Items")]:
         write("")
         write(f"""
 org ${table_addr:04X}
-banksk{BANK:X}
+banksk{rom.BANK:X}
 table_level_{table_name}:""")
         
         leveldata = [""]
         leveltables = ""
         def writeld(s):
             leveldata[0] += s + "\n"
-        for i, level in enumerate(LEVELS):
-            stagetable_C = readword(BANK, table_addr + 2*i)
+        for i, level in enumerate(rom.LEVELS):
+            stagetable_C = readword(rom.BANK, table_addr + 2*i)
             if not level:
                 write(f"    dw Plant_{table_name} ; spurious entry")
             else:
                 write(f"    dw {level}_{table_name}")
                 leveltables += f"\n{level}_{table_name}:\n"
-                for substage in range(SUBSTAGECOUNT[i]):
+                for substage in range(rom.SUBSTAGECOUNT[i]):
                     writeld("")
-                    substagetable_C = readword(BANK, stagetable_C + 2*substage)
+                    substagetable_C = readword(rom.BANK, stagetable_C + 2*substage)
                     leveltables += f"    dw Lvl{level}_{substage}_{table_name}\n"
                     
                     writeld(f"Lvl{level}_{substage}_{table_name}:")
                     writeld(f";   screen,   b,  slot, entity,                  x,   y")
-                    read_substage_data(level, substage, BANK, substagetable_C, writeld)
+                    read_substage_data(level, substage, rom.BANK, substagetable_C, writeld)
         
         write(leveltables)
         write(leveldata[0])
