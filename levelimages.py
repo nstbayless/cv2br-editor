@@ -18,28 +18,32 @@ if len(sys.argv) != 3:
 def ghosttint(r, g, b):
     return (r//2, g//2, int(b/1.5))
 
-def pasteScreen(out, i, tchunks, x, y, ghostly):
+def pasteTileChunk(out, i, chidx, x, y, ghostly=False):
+    chunk = get_tile_chunk(chidx, i)
+        
+    #iterate over tiles
+    for k, c in enumerate(chunk):
+        cx = k % 4
+        cy = k // 4
+        xdraw = x + cx * 8
+        ydraw = y + cy * 8
+        
+        img = get_tile_img(c, i)
+        if ghostly:
+            pixels = out.load()
+            pix2 = img.load()
+            for _x in range(8):
+                for _y in range(8):
+                    pixels[xdraw+_x, ydraw+_y] = ghosttint(*pix2[_x,_y])
+        else:
+            out.paste(img, (xdraw, ydraw))
+    
+
+def pasteScreen(out, level, tchunks, x, y, ghostly=False):
     for t, chidx in enumerate(tchunks):
         sx = t % 5
         sy = t // 5
-        chunk = get_tile_chunk(chidx, i)
-        
-        #iterate over tiles
-        for k, c in enumerate(chunk):
-            cx = k % 4
-            cy = k // 4
-            xdraw = ((sx * 4) + cx) * 8
-            ydraw = (sy * 4 + cy) * 8
-            
-            img = get_tile_img(c, i)
-            if ghostly:
-                pixels = out.load()
-                pix2 = img.load()
-                for _x in range(8):
-                    for _y in range(8):
-                        pixels[x+xdraw+_x, y+ydraw+_y] = ghosttint(*pix2[_x,_y])
-            else:
-                out.paste(img, (x+xdraw, y+ydraw))
+        pasteTileChunk(out, level, chidx, x + sx * 8 * 4, y + sy * 8 * 4, ghostly)
 
 with open(sys.argv[1], "rb") as f:
     rom.readrom(f.read())
@@ -115,6 +119,24 @@ def get_tile_img(id, level):
         TILE_IMG_MAP[(id, level)] = get_tile_img_memoized(id, level)
     return TILE_IMG_MAP[(id, level)]
     
+def write_chunks_image(level):
+    # produce image for the tilechunkset
+    levelname = rom.LEVELS[level]
+    dim = 8*4
+    MARGIN=2
+    out = Image.new(mode="RGB", size=(dim * 16 + MARGIN * 15, dim * 16 + MARGIN * 15))
+    
+    tilec = rom.get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, level) - readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
+    assert tilec > 0, f"{levelname}: {tilec}"
+    tilec = tilec // 0x10 + 1
+    for i in range(16):
+        for j in range(16):
+            chidx = i + j * 16
+            pasteTileChunk(out, level, chidx, i * (dim + MARGIN), j * (dim + MARGIN), chidx >= tilec )
+        
+    out.save(os.path.join(dir, f"{levelname}_tilechunks.png"))
+    
+    
 for i, level in enumerate(rom.LEVELS):
     if level is None:
         continue
@@ -122,10 +144,13 @@ for i, level in enumerate(rom.LEVELS):
     # first, load vram for level
     vrambuffer[:] = [0 for i in range(0x2000)]
     buffaddr = readtableword(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_TABLE, i)
+    load_vram_metabuffer(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_COMMON)
     load_vram_metabuffer(rom.LEVEL_TILESET_TABLE_BANK, buffaddr)
     
+    write_chunks_image(i)
+    
+    # produce image for every sublevel
     for sublevel in range(rom.SUBSTAGECOUNT[i]):
-        
         x, y, d, table = rom.produce_sublevel_screen_arrangement(i, sublevel)
         table_x0, table_x1, table_y0, table_y1 = get_screensbuff_boundingbox(table)
         
@@ -156,8 +181,5 @@ for i, level in enumerate(rom.LEVELS):
                     screen = te & 0x0F
                     tilechunks = [readbyte(rom.BANK6, tiles_begin + 20*screen + r) for r in range(20)]
                     pasteScreen(out, i, tilechunks, (xi-table_x0)*8*5*4, (yi-table_y0)*4*8*4, screen >= screenc)
-        
-        # iterate over 4x4 tile chunks
-        
-        
+                    
         out.save(os.path.join(dir, f"{level}_{sublevel}.png"))

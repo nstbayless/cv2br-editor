@@ -72,7 +72,7 @@ def get_entry_end(table, bank, level, substage=None, drac3_size=None):
             drac3_size = 0
     else:
         level += 1
-        if level >= len(SUBSTAGECOUNT):
+        if level >= len(SUBSTAGECOUNT) or (table == LEVTAB_TILES4x4_BANK2 and bank == BANK2 and level >= len(SUBSTAGECOUNT)-1):
             level -= 1
         else:
             drac3_size = 0
@@ -115,8 +115,10 @@ def readrom(_data):
     TILES4x4_BEGIN = 0x44c0
     global LEVEL_TILESET_TABLE
     global LEVEL_TILESET_TABLE_BANK
+    global LEVEL_TILESET_COMMON
     LEVEL_TILESET_TABLE_BANK = 0
     LEVEL_TILESET_TABLE = 0x2e06
+    LEVEL_TILESET_COMMON = 0x2b50
     global LEVEL_SCROLLDIR_TABLE
     LEVEL_SCROLLDIR_TABLE = 0x4320
     
@@ -146,6 +148,7 @@ def readrom(_data):
         LEVTAB_ROUTINE = 0x70af
         LEVEL_TILESET_TABLE = 0x5A15
         LEVEL_TILESET_TABLE_BANK = 0x16
+        LEVEL_TILESET_COMMON = 0x5a33
         LEVEL_SCREEN_TABLE = 0x50C8
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
@@ -205,22 +208,3 @@ def readrom(_data):
         0x72: "BOSS_SOLEIL",
         0x73: "BOSS_DRACULA",
     }
-
-"""
-ROMTYPE = "us"
-BANK2 = 2
-LEVTAB_TILES4x4_BANK2 = 0
-LEVTAB_TILES_BANK2 = 0
-TILES4x4_BEGIN = 0
-BANK = 3
-LEVTAB_ROUTINE = 0
-BANK6 = 6
-LEVTAB_A = 0
-LEVTAB_B = 0
-LEVTAB_C = 0
-
-LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
-SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]
-
-Entities = {}
-"""
