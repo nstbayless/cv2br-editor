@@ -225,9 +225,9 @@ endm
                 writese("")
                 if i == 1 and sublevel == 0:
                     writese(f"org ${screen_ents_begin:04X}")
-                    writese(f"banksk{rom.BANK3}")
+                    writese(f"banksk{rom.BANK3:X}")
                 else:
-                    writese(f"; addr={rom.BANK3}:{screen_ents_begin:04X}")
+                    writese(f"; addr={rom.BANK3:X}:{screen_ents_begin:04X}")
                 writese(f"Lvl{level}_{sublevel}_ScreenEnts: ; has {screenc} screen{'s' if screenc != 1 else ''}")
                 for screen in range(screenc):
                     entsaddr = rom.readword(rom.BANK3, screen_ents_begin + screen*2)
@@ -244,7 +244,7 @@ endm
                     writese2(f"")
                     if entsaddr != prevaddr:
                         writese2(f"org ${entsaddr:04X}")
-                        writese2(f"banksk{rom.BANK3}")
+                        writese2(f"banksk{rom.BANK3:X}")
                     else:
                         writese2(f"; addr={entsaddr:04X}")
                     writese2(f"Lvl{level}_{sublevel}_{screen}_ScreenEnts:")
