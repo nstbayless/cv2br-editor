@@ -23,9 +23,18 @@ def idname(id):
         return f"${id:02x}"
     
 I = " " * 4
-    
+
+mapEntTableAddrToLabel = dict()
+
+def writeLabelIfAddrInMap(addr, out):
+    if addr in mapEntTableAddrToLabel:
+        for label in mapEntTableAddrToLabel[addr]:
+            out(f"{label}:")
+        del mapEntTableAddrToLabel[addr]
+
 def read_substage_data(level, substage, bank, addr, out):
     while True:
+        writeLabelIfAddrInMap(addr, out)
         b = readbyte(bank, addr)
         if b == 0xFF:
             out(f"{I}ROOM")
@@ -34,6 +43,7 @@ def read_substage_data(level, substage, bank, addr, out):
             out(f"{I}ROOM_COMPRESSED")
             addr += 1
             while readbyte(bank, addr) < 0xFD:
+                writeLabelIfAddrInMap(addr, out)
                 slot = readbyte(bank, addr)
                 id = readbyte(bank, addr+1)
                 x = readbyte(bank, addr+2)
@@ -46,6 +56,7 @@ def read_substage_data(level, substage, bank, addr, out):
             break
         else:
             while readbyte(bank, addr) < 0xFD:
+                writeLabelIfAddrInMap(addr, out)
                 a = readbyte(bank, addr+0) # which screen in this room it appears at
                 b = readbyte(bank, addr+1)
                 slot = readbyte(bank, addr+2)
@@ -158,6 +169,8 @@ with open("leveldata.asm", "w") as f:
         
     write(tiles_s[0])
 
+LEVTABS_AND_NAMES = [(rom.LEVTAB_A, "Misc"), (rom.LEVTAB_B, "Enemies"), (rom.LEVTAB_C, "Items")]
+
 with open("levelobjects.asm", "w") as f:
     def write(t):
         f.write(t)
@@ -179,7 +192,88 @@ endm
     for i in range(8):
         write(f"SLOT{i}: equ ${i:02x}")
     
-    for table_addr, table_name in [(rom.LEVTAB_A, "Misc"), (rom.LEVTAB_B, "Enemies"), (rom.LEVTAB_C, "Items")]:
+    screenentdata = [""]
+    screenentdata2 = [""]
+    def writese(s):
+        screenentdata[0] += s + "\n"
+    def writese2(s):
+        screenentdata2[0] += s + "\n"
+    writese("")
+    writese(f"org ${rom.SCREEN_ENT_TABLE:04X}")
+    writese(f"banksk{rom.BANK:X}")
+    writese(f"entity_table_index_by_screen:")
+    for i, level in enumerate(rom.LEVELS):
+        if level is None:
+            level = "Plant"
+        writese(f"    dw Lvl{level}_ScreenEnts")
+    
+    for i, level in enumerate(rom.LEVELS):
+        if level is not None:
+            writese("")
+            writese(f"Lvl{level}_ScreenEnts:")
+            for sublevel in range(rom.SUBSTAGECOUNT[i]):
+                writese(f"    dw Lvl{level}_{sublevel}_ScreenEnts")
+    
+    prevaddr = None
+    screenentaddrassoc = {}
+    for i, level in enumerate(rom.LEVELS):
+        if level is not None:
+            for sublevel in range(rom.SUBSTAGECOUNT[i]):
+                screen_ents_begin = rom.readtableword(rom.BANK3, rom.SCREEN_ENT_TABLE, i, sublevel)
+                screen_ents_end = rom.get_entry_end(rom.SCREEN_ENT_TABLE, rom.BANK3, i, sublevel)
+                screenc = (screen_ents_end - screen_ents_begin)//2
+                writese("")
+                if i == 1 and sublevel == 0:
+                    writese(f"org ${screen_ents_begin:04X}")
+                    writese(f"banksk{rom.BANK3}")
+                else:
+                    writese(f"; addr={rom.BANK3}:{screen_ents_begin:04X}")
+                writese(f"Lvl{level}_{sublevel}_ScreenEnts: ; has {screenc} screen{'s' if screenc != 1 else ''}")
+                for screen in range(screenc):
+                    entsaddr = rom.readword(rom.BANK3, screen_ents_begin + screen*2)
+                    if entsaddr in screenentaddrassoc:
+                        rep = screenentaddrassoc[entsaddr]
+                        writese(f"    dw Lvl{rep[0]}_{rep[1]}_{rep[2]}_ScreenEnts ; re-used!")
+                        writese2(f"\n; ({rep[0]}_{rep[1]}_{rep[2]} reuses previous entry)")
+                        continue
+                    else:
+                        screenentaddrassoc[entsaddr] = (level, sublevel, screen)
+                    
+                    entsmax = rom.readword(rom.BANK3, screen_ents_end) if level != "Drac3" else entsaddr + 10
+                    writese(f"    dw Lvl{level}_{sublevel}_{screen}_ScreenEnts")
+                    writese2(f"")
+                    if entsaddr != prevaddr:
+                        writese2(f"org ${entsaddr:04X}")
+                        writese2(f"banksk{rom.BANK3}")
+                    else:
+                        writese2(f"; addr={entsaddr:04X}")
+                    writese2(f"Lvl{level}_{sublevel}_{screen}_ScreenEnts:")
+                    entcat = 0
+                    catnames = ["Misc", "Enemies", "Items"]
+                    for entcat in range(3):
+                        entslist_begin = rom.readtableword(rom.BANK3, LEVTABS_AND_NAMES[entcat][0], i, sublevel)
+                        h = readbyte(rom.BANK3, entsaddr)
+                        writese2("")
+                        entsaddr += 1
+                        if h >= 0x80:
+                            writese2(f"    db $80 ; do not set {catnames[entcat].lower()} list index")
+                            continue
+                        
+                        writese2(f"    db ${h:02X} ; {catnames[entcat].lower()} count")
+                        offset = readbyte(rom.BANK3, entsaddr)
+                        entsaddr += 1
+                        address = readword(rom.BANK3, entsaddr)
+                        entsaddr += 2
+                        strange=False
+                        if entslist_begin + offset != address and level == "Plant":
+                            strange=True #print(f"strangeness. {level} {sublevel} {screen} {catnames[entcat]}: {entslist_begin:04X} + {offset:02X} != {address:04X}")
+                        writese2(f"    db ${offset:02X} ; offset{' (seems incongruent with address?)' if strange else ''}")
+                        label = f"Lvl{level}_{sublevel}_{screen}_{catnames[entcat]}_start"
+                        mapEntTableAddrToLabel[address] = mapEntTableAddrToLabel.get(address, []) + [label]
+                        writese2(f"    dw {label} ; address")
+                    prevaddr = entsaddr
+    
+    for table_addr, table_name in LEVTABS_AND_NAMES:
         write("")
         write(f"""
 org ${table_addr:04X}
@@ -188,10 +282,11 @@ table_level_{table_name}:""")
         
         leveldata = [""]
         leveltables = ""
+        
         def writeld(s):
             leveldata[0] += s + "\n"
         for i, level in enumerate(rom.LEVELS):
-            stagetable_C = readword(rom.BANK, table_addr + 2*i)
+            stagetable_C = readword(rom.BANK3, table_addr + 2*i)
             if not level:
                 write(f"    dw Plant_{table_name} ; spurious entry")
             else:
@@ -199,12 +294,25 @@ table_level_{table_name}:""")
                 leveltables += f"\n{level}_{table_name}:\n"
                 for substage in range(rom.SUBSTAGECOUNT[i]):
                     writeld("")
-                    substagetable_C = readword(rom.BANK, stagetable_C + 2*substage)
+                    substagetable_C = readword(rom.BANK3, stagetable_C + 2*substage)
                     leveltables += f"    dw Lvl{level}_{substage}_{table_name}\n"
                     
+                    writeld(f"; addr={rom.BANK3:X}:{substagetable_C:X}")
                     writeld(f"Lvl{level}_{substage}_{table_name}:")
-                    writeld(f";   screen,   b,  slot, entity,                  x,   y")
-                    read_substage_data(level, substage, rom.BANK, substagetable_C, writeld)
+                    writeld(f";   screen, off,  slot, entity,                  x,   y")
+                    writeld(f";   note: screen needs high bit set if vertical scrolling")
+                    read_substage_data(level, substage, rom.BANK3, substagetable_C, writeld)
         
         write(leveltables)
         write(leveldata[0])
+    write(screenentdata[0])
+    write(screenentdata2[0])
+    
+    if len(mapEntTableAddrToLabel) > 0:
+        write("")
+        write("; somehow, these didn't align to anywhere in particular..?")
+        for addr in sorted(mapEntTableAddrToLabel.keys()):
+            write(f"org ${addr:04X}")
+            for label in mapEntTableAddrToLabel[addr]:
+                write(f"{label}:")
+            write("")

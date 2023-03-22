@@ -54,12 +54,14 @@ def produce_sublevel_screen_arrangement(level, sublevel):
             x += xstride
             y += ystride
 
-def get_entry_end(table, bank, level, substage=None, drac3_size=None):
+def get_entry_end(table, bank, level, substage=None, screen=None, drac3_size=None):
     if drac3_size is None:
         if table == LEVTAB_TILES_BANK2 and bank == BANK2:
             drac3_size = 5*20 # this is a guess
         if table == LEVTAB_TILES4x4_BANK2 and bank == BANK2:
             drac3_size = 0x820 # this is a guess
+        if table == SCREEN_ENT_TABLE and bank == BANK3:
+            drac3_size = 4 # this is a guess
     if substage is not None:
         substage += 1
         if substage >= SUBSTAGECOUNT[level]:
@@ -124,9 +126,13 @@ def readrom(_data):
     
     # bank3
     global BANK
+    global BANK3
+    BANK3 = 3
     BANK = 3
     global LEVTAB_ROUTINE
     LEVTAB_ROUTINE = 0x6cc7
+    global SCREEN_ENT_TABLE
+    SCREEN_ENT_TABLE = 0x62c1
 
     # bank6
     global BANK6
@@ -139,6 +145,7 @@ def readrom(_data):
 
     if ROMTYPE == "kgbc4eu":
         BANK2 = 0x12
+        BANK3 = 0x13
         BANK = 0x13
         BANK6 = 0x16
         LEVTAB_TILES4x4_BANK2 += 75
@@ -150,11 +157,12 @@ def readrom(_data):
         LEVEL_TILESET_TABLE_BANK = 0x16
         LEVEL_TILESET_COMMON = 0x5a33
         LEVEL_SCREEN_TABLE = 0x50C8
+        SCREEN_ENT_TABLE = 0x66aa
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
     LEVTAB_B = readword(BANK, LEVTAB_ROUTINE + 13)
-    LEVTAB_C = readword(BANK, LEVTAB_ROUTINE + 22)
+    LEVTAB_C = readword(BANK, LEVTAB_ROUTINE + 22) # us:0x5d25
 
     LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
     SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]

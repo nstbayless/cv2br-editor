@@ -25,8 +25,8 @@ then
     rm -r "outimg/$BASE"
 fi
 
-mkdir -p "outimg/$BASE"
-python3 ./levelimages.py "$BASE.gb" "outimg/$BASE"
+#mkdir -p "outimg/$BASE"
+#python3 ./levelimages.py "$BASE.gb" "outimg/$BASE"
 
 BUILDNAME="$BASE.out.gb"
 echo "incbin \"$BASE.gb\"" > incbase.asm
