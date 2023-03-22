@@ -54,6 +54,25 @@ def produce_sublevel_screen_arrangement(level, sublevel):
             x += xstride
             y += ystride
 
+def get_screensbuff_boundingbox(arr):
+    # this function implemented by ChatGPT
+    min_row = len(arr)
+    min_col = len(arr[0])
+    max_row = -1
+    max_col = -1
+    for i in range(len(arr)):
+        for j in range(len(arr[i])):
+            if arr[i][j] != 0:
+                if i < min_row:
+                    min_row = i
+                if j < min_col:
+                    min_col = j
+                if i > max_row:
+                    max_row = i
+                if j > max_col:
+                    max_col = j
+    return min_row, max_row+1, min_col, max_col+1,
+
 def get_entry_end(table, bank, level, substage=None, screen=None, drac3_size=None):
     if drac3_size is None:
         if table == LEVTAB_TILES_BANK2 and bank == BANK2:

@@ -166,8 +166,106 @@ with open("leveldata.asm", "w") as f:
                     s += ","
                 s += f" ${a:02x}"
             write(f"{s}   ; tile ${i:02X}")
-        
     write(tiles_s[0])
+    
+    # level layout
+    write("")
+    write(f"org ${rom.LEVEL_SCREEN_TABLE:04X}")
+    write(f"banksk{rom.BANK6:X}")
+    write("screen_layout_table:")
+    for i, level in enumerate(rom.LEVELS):
+        if level is None:
+            addr = rom.readword(rom.BANK6, rom.LEVEL_SCREEN_TABLE + i*2)
+            write(f"    dw ${addr:04X}")
+        else:
+            write(f"    dw Lvl{level}_ScreenLayout")
+        
+    
+    for i, level in enumerate(rom.LEVELS):
+        if level is not None:
+            addr = rom.readtableword(rom.BANK6, rom.LEVEL_SCREEN_TABLE, i)
+            write("")
+            write(f"org ${addr:04X}")
+            write(f"banksk{rom.BANK6:X}")
+            write(f"Lvl{level}_ScreenLayout:")
+            for sublevel in range(rom.SUBSTAGECOUNT[i]):
+                write(f"    dw Lvl{level}_{sublevel}_SreenLayout")
+
+    for i, level in enumerate(rom.LEVELS):
+        if level is not None:
+            for sublevel in range(rom.SUBSTAGECOUNT[i]):
+                addr = rom.readtableword(rom.BANK6, rom.LEVEL_SCREEN_TABLE, i, sublevel)
+                xstart, ystart, scrolldir, layout = rom.produce_sublevel_screen_arrangement(i, sublevel)
+                table_x0, table_x1, table_y0, table_y1 = rom.get_screensbuff_boundingbox(layout)
+                
+                write(f"")
+                write(f"org ${addr:04X}")
+                write(f"banksk{rom.BANK6:X}")
+                write(f"Lvl{level}_{sublevel}_SreenLayout:")
+                
+                write("")
+                for y in range(table_y0, table_y1):
+                    s = "    ;"
+                    for x in range(table_x0, table_x1):
+                        c = layout[x][y]
+                        if c == 0:
+                            s += "    "
+                        else:
+                            if x == xstart and y == ystart:
+                                s += "["
+                            else:
+                                s += " "
+                            s += f"{c:02X}"
+                            if x == xstart and y == ystart:
+                                s += "]"
+                            else:
+                                s += " "
+                    s += ";"
+                    write(s)
+                write("")
+                
+                write(f"    db ${xstart:02X} ; x start")
+                write(f"    db ${ystart:02X} ; y start")
+                addr += 2
+                write("")
+                
+                done = False
+                while not done:
+                    dst = readword(rom.BANK6, addr)
+                    x = dst%0x10
+                    y = (dst//0x10)%0x10
+                    addr += 2
+                    
+                    stride = readbyte(rom.BANK6, addr)
+                    xstride = stride % 0x10
+                    if xstride >= 0x8:
+                        xstride -= 0x10
+                    ystride = stride // 0x10
+                    if ystride >= 0x8:
+                        ystride -= 0x8
+                    addr += 1
+                    
+                    write(f"    dw ${dst:04X} ; destination x={x:X} y={y:X}")
+                    write(f"    db ${stride:02X} ; stride x={xstride} y={ystride}")
+                    
+                    _bytes = []
+                    while True:
+                        header = readbyte(rom.BANK6, addr)
+                        addr += 1
+                        if header in [0xff, 0xfe]:
+                            write(f"    db " + ", ".join(_bytes))
+                        if header == 0xff:
+                            write(f"    db $ff ; end of layout")
+                            done = True
+                            break
+                        elif header == 0xfe:
+                            write(f"    db $fe ; next packet")
+                            write("")
+                            break
+                        else:
+                            _bytes += [f"${header:02X}"]
+                    
+                    
 
 LEVTABS_AND_NAMES = [(rom.LEVTAB_A, "Misc"), (rom.LEVTAB_B, "Enemies"), (rom.LEVTAB_C, "Items")]
 

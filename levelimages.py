@@ -67,25 +67,6 @@ def load_vram_metabuffer(bank, addr):
         srcaddr = rom.readword(bank, addr)
         addr += 2
         load_vram_buffer(destaddr, destlen, srcbank, srcaddr)
-    
-def get_screensbuff_boundingbox(arr):
-    # this function implemented by ChatGPT
-    min_row = len(arr)
-    min_col = len(arr[0])
-    max_row = -1
-    max_col = -1
-    for i in range(len(arr)):
-        for j in range(len(arr[i])):
-            if arr[i][j] != 0:
-                if i < min_row:
-                    min_row = i
-                if j < min_col:
-                    min_col = j
-                if i > max_row:
-                    max_row = i
-                if j > max_col:
-                    max_col = j
-    return min_row, max_row+1, min_col, max_col+1,
      
 def get_tile_chunk(id, level):
     if id == 0:
@@ -152,7 +133,7 @@ for i, level in enumerate(rom.LEVELS):
     # produce image for every sublevel
     for sublevel in range(rom.SUBSTAGECOUNT[i]):
         x, y, d, table = rom.produce_sublevel_screen_arrangement(i, sublevel)
-        table_x0, table_x1, table_y0, table_y1 = get_screensbuff_boundingbox(table)
+        table_x0, table_x1, table_y0, table_y1 = rom.get_screensbuff_boundingbox(table)
         
         # print level screens:
         if False:
