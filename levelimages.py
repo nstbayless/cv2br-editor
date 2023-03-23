@@ -189,7 +189,18 @@ for i, level in enumerate(rom.LEVELS):
                                     _y = screenypx + enty + offset
                                     ImageDraw.Draw(outents).line((_x - ENTCROSSSIZE, _y, _x + ENTCROSSSIZE, _y), fill=col)
                                     ImageDraw.Draw(outents).line((_x, _y - ENTCROSSSIZE, _x, _y + ENTCROSSSIZE), fill=col)
-                                    ImageDraw.Draw(outents).text((_x+4, _y), name, fill=col)
+                                    anchor = ""
+                                    if entx >= 0x78:
+                                        anchor = "r"
+                                    else:
+                                        entx = 4
+                                        anchor = "l"
+                                    if enty >= 0x60:
+                                        anchor += "b"
+                                        _y -= 12
+                                    else:
+                                        anchor += "t"
+                                    ImageDraw.Draw(outents).text((_x, _y), name, fill=col)
                     
         out.paste(outents, (0, 0), outents)
         out.save(os.path.join(dir, f"{level}_{sublevel}.png"))
