@@ -73,6 +73,150 @@ def get_screensbuff_boundingbox(arr):
                     max_col = j
     return min_row, max_row+1, min_col, max_col+1,
 
+# returns [(entc, offset, entstart) for each category]
+def read_ent_slices(bank, addr):
+    retv = []
+    for i in range(3):
+        header = readbyte(bank, addr)
+        addr += 1
+        if header >= 0x80:
+            retv.append((0, None, None))
+        else:
+            offset = readbyte(bank, addr)
+            addr += 1
+            entstart = readword(bank, addr)
+            addr += 2
+            retv.append((header, offset, entstart))
+    return retv
+
+# this is a bit involved, as the game isn't laid out in a way that makes
+# random access like this easy.
+# We need to floodfill a bit.
+# We consider a "room" to be a consecutive intra-scrolling sequence of screens.
+def get_entities_in_screens(level, sublevel):
+    maxsid = (get_entry_end(SCREEN_ENT_TABLE, BANK3, level, sublevel) - readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel)) // 2
+    sublevelentstartbycat = [readtableword(BANK3, LEVTABS_AND_NAMES[i][0], level, sublevel) for i in range(3)]
+    startx, starty, scrolldir, screens = produce_sublevel_screen_arrangement(level, sublevel)
+    entstable = [[None for j in range(16)] for i in range(16)]
+    for x in range(16):
+        for y in range(16):
+            s = screens[x][y]
+            if s != 0 and s is None:
+                sid = s & 0xf
+                stype = s >> 8
+                
+                # A is left/top of a long room
+                # B is a non-scrolling room
+                # 9 is right/bottom of long room
+                if stype not in [0xA, 0xB, 0x9]:
+                    continue
+                flooddir = {0xA: -1, 0xB: 0, 0x9: 1}[stype]
+                flooddirx = 0 if scrolldir == 1 else flooddir
+                flooddiry = 0 if scrolldir == 0 else flooddir
+                endflood = {0xA: 0x9, 0xB: 0xB, 0x9: 0xA}[stype]
+                entsize = {0xA: 6, 0xB: 4, 0x9: 6}
+                
+                if sid >= maxsid:
+                    continue
+                
+                # find start of 'room' in entity table for each entcat
+                entslices = read_ent_slices(BANK3, readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel, sid))
+                entroomstart = []
+                entroomsend = []
+                for i, slice in enumerate(entslices):
+                    start = slice[2]
+                    if start is None:
+                        entroomstart.append(None)
+                        entroomsend.append(None)
+                    else:
+                        end = start
+                        # find start
+                        while True:
+                            b = readbyte(BANK3, start)
+                            if b >= 0x80 or start-1 == sublevelentstartbycat[i]:
+                                entroomstart.append(start)
+                                break
+                            else:
+                                start -= entsize
+                        # find end
+                        while True:
+                            b = readbyte(BANK3, end)
+                            if b >= 0x80:
+                                entroomsend.append(end)
+                                break
+                            else:
+                                end += entsize
+                  
+                # begin floodfill across screens in this room  
+                _x = x
+                _y = y
+                while True:
+                    floodsid = screens[_x][_y]
+                    ents = []
+                    for start, end in zip(entroomstart, entroomsend):
+                        # get ents in this cat(egory) on this screen by looking between start and end
+                        for e in range(start, end, entsize):
+                            if entsize == 4:
+                                slot = readbyte(BANK3, e)
+                                type = readbyte(BANK3, e+1)
+                                ex = readbyte(BANK3, e+2)
+                                ey = readbyte(BANK3, e+3)
+                                ents.push_back({
+                                    "x":ex,
+                                    "y":ey,
+                                    "slot":slot,
+                                    "type":type,
+                                    
+                                    # in non-scrolling rooms, entities don't need a scroll margin
+                                    "margin":None
+                                })
+                            else:
+                                scroll = readword(BANK3, e)
+                                slot = readbyte(BANK3, e+2)
+                                type = readbyte(BANK3, e+3)
+                                ex = readbyte(BANK3, e+4)
+                                ey = readbyte(BANK3, e+5)
+                                if scrolldir == 0:
+                                    escreen = (scroll >> 8) + (ex + scroll & 0xff) // 0xa0
+                                    if escreen != floodsid:
+                                        continue
+                                    epos = (ex + scroll & 0xff) % 0xa0
+                                    ents.push_back({
+                                        "x":epos,
+                                        "y":ey,
+                                        "slot":slot,
+                                        "type":type,
+                                        "margin": ex,
+                                    })
+                                else:
+                                    escreen = (scroll >> 8) + (ey + scroll & 0xff) // 0x80
+                                    if escreen != floodsid:
+                                        continue
+                                    epos = (ey + scroll & 0xff) % 0xa0
+                                    ents.push_back({
+                                        "x":ex,
+                                        "y":epos,
+                                        "slot":slot,
+                                        "type":type,
+                                        "margin": ey,
+                                    })
+                    entstable[_x][_y] = ents
+                                    
+                    if screens[_x][_y] >> 8 == endflood:
+                        break
+                    else:
+                        _x += flooddirx
+                        if _x < 0:
+                            _x = 0xf
+                        if _x >= 0x10:
+                            _x = 0
+                        _y += flooddiry
+                        if _y < 0:
+                            _y = 0xf
+                        if _y >= 0x10:
+                            _y = 0
+    return entstable
+
 def get_entry_end(table, bank, level, substage=None, screen=None, drac3_size=None):
     if drac3_size is None:
         if table == LEVTAB_TILES_BANK2 and bank == BANK2:
@@ -182,6 +326,8 @@ def readrom(_data):
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
     LEVTAB_B = readword(BANK, LEVTAB_ROUTINE + 13)
     LEVTAB_C = readword(BANK, LEVTAB_ROUTINE + 22) # us:0x5d25
+    global LEVTABS_AND_NAMES
+    LEVTABS_AND_NAMES = [(LEVTAB_A, "Misc"), (LEVTAB_B, "Enemies"), (LEVTAB_C, "Items")]
 
     LEVELS = [None, "Plant", "Crystal", "Cloud", "Rock", "Drac1", "Drac2", "Drac3"]
     SUBSTAGECOUNT = [0, 6, 5, 5, 6, 5, 5, 1]

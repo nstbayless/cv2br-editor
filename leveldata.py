@@ -109,6 +109,8 @@ with open("leveldata.asm", "w") as f:
                     writeti(f"org ${addr2:04X}")
                     writeti(f"banksk{rom.BANK6:X}")
                     First = False
+                else:
+                    writeti(f"; addr={rom.BANK6:X}:{addr2:04X}")
                 writeti(f"{level}_{substage}_Tiles:")
                 tiles = rom.get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, substage) - addr2
                 if tiles <= 0:
@@ -189,7 +191,7 @@ with open("leveldata.asm", "w") as f:
             write(f"banksk{rom.BANK6:X}")
             write(f"Lvl{level}_ScreenLayout:")
             for sublevel in range(rom.SUBSTAGECOUNT[i]):
-                write(f"    dw Lvl{level}_{sublevel}_SreenLayout")
+                write(f"    dw Lvl{level}_{sublevel}_ScreenLayout")
 
     for i, level in enumerate(rom.LEVELS):
         if level is not None:
@@ -201,7 +203,7 @@ with open("leveldata.asm", "w") as f:
                 write(f"")
                 write(f"org ${addr:04X}")
                 write(f"banksk{rom.BANK6:X}")
-                write(f"Lvl{level}_{sublevel}_SreenLayout:")
+                write(f"Lvl{level}_{sublevel}_ScreenLayout:")
                 
                 write("")
                 for y in range(table_y0, table_y1):
@@ -264,10 +266,6 @@ with open("leveldata.asm", "w") as f:
                             break
                         else:
                             _bytes += [f"${header:02X}"]
-                    
-                    
-
-LEVTABS_AND_NAMES = [(rom.LEVTAB_A, "Misc"), (rom.LEVTAB_B, "Enemies"), (rom.LEVTAB_C, "Items")]
 
 with open("levelobjects.asm", "w") as f:
     def write(t):
@@ -344,17 +342,17 @@ endm
                         writese2(f"org ${entsaddr:04X}")
                         writese2(f"banksk{rom.BANK3:X}")
                     else:
-                        writese2(f"; addr={entsaddr:04X}")
+                        writese2(f"; addr={rom.BANK3:X}:{entsaddr:04X}")
                     writese2(f"Lvl{level}_{sublevel}_{screen}_ScreenEnts:")
                     entcat = 0
                     catnames = ["Misc", "Enemies", "Items"]
                     for entcat in range(3):
-                        entslist_begin = rom.readtableword(rom.BANK3, LEVTABS_AND_NAMES[entcat][0], i, sublevel)
+                        entslist_begin = rom.readtableword(rom.BANK3, rom.LEVTABS_AND_NAMES[entcat][0], i, sublevel)
                         h = readbyte(rom.BANK3, entsaddr)
                         writese2("")
                         entsaddr += 1
                         if h >= 0x80:
-                            writese2(f"    db $80 ; do not set {catnames[entcat].lower()} list index")
+                            writese2(f"    db $80 ; no {catnames[entcat].lower()} in any screen in this room at all")
                             continue
                         
                         writese2(f"    db ${h:02X} ; {catnames[entcat].lower()} count")
@@ -363,15 +361,17 @@ endm
                         address = readword(rom.BANK3, entsaddr)
                         entsaddr += 2
                         strange=False
-                        if entslist_begin + offset != address and level == "Plant":
-                            strange=True #print(f"strangeness. {level} {sublevel} {screen} {catnames[entcat]}: {entslist_begin:04X} + {offset:02X} != {address:04X}")
-                        writese2(f"    db ${offset:02X} ; offset{' (seems incongruent with address?)' if strange else ''}")
                         label = f"Lvl{level}_{sublevel}_{screen}_{catnames[entcat]}_start"
                         mapEntTableAddrToLabel[address] = mapEntTableAddrToLabel.get(address, []) + [label]
+                        if entslist_begin + offset != address:
+                            strange=True #print(f"strangeness. {level} {sublevel} {screen} {catnames[entcat]}: {entslist_begin:04X} + {offset:02X} != {address:04X}")
+                            writese2(f"    db ${offset:02X} ; offset{' (seems incongruent with address?)' if strange else ''}")
+                        else:
+                            writese2(f"    db {label} - Lvl{level}_{sublevel}_{catnames[entcat]} ; offset")
                         writese2(f"    dw {label} ; address")
                     prevaddr = entsaddr
     
-    for table_addr, table_name in LEVTABS_AND_NAMES:
+    for table_addr, table_name in rom.LEVTABS_AND_NAMES:
         write("")
         write(f"""
 org ${table_addr:04X}
