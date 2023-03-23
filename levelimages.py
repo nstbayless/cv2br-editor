@@ -2,7 +2,7 @@ import sys
 import os
 import rom
 from rom import readword, readbyte, readtableword
-from PIL import Image
+from PIL import Image, ImageDraw
 
 PALETTE = [
     (0xff, 0xff, 0xff),
@@ -10,6 +10,14 @@ PALETTE = [
     (0x30, 0x30, 0x30),
     (0, 0, 0),
 ]
+
+ENTPALETTES = [
+    (0xff, 0xa0, 0x40), # misc
+    (0x40, 0x40, 0xff), # enemies
+    (0x90, 0x80, 0x20), # items
+]
+
+ENTCROSSSIZE = 4
 
 if len(sys.argv) != 3:
     print(f"usage: {sys.argv[0]} base.gb out/")
@@ -133,6 +141,7 @@ for i, level in enumerate(rom.LEVELS):
     # produce image for every sublevel
     for sublevel in range(rom.SUBSTAGECOUNT[i]):
         x, y, d, table = rom.produce_sublevel_screen_arrangement(i, sublevel)
+        entstable = rom.get_entities_in_screens(i, sublevel)
         table_x0, table_x1, table_y0, table_y1 = rom.get_screensbuff_boundingbox(table)
         
         # print level screens:
@@ -153,6 +162,7 @@ for i, level in enumerate(rom.LEVELS):
         assert (tiles_begin - tiles_end) % 20 == 0
         screenc = (tiles_end - tiles_begin) // 20
         out = Image.new(mode="RGB", size=(8 * 5 * 4 * (table_x1 - table_x0), 4 * 4 * 8 * (table_y1 - table_y0)))
+        outents = Image.new(mode="RGBA", size=(8 * 5 * 4 * (table_x1 - table_x0), 4 * 4 * 8 * (table_y1 - table_y0)))
         
         # iterate over screens:
         for yi in range(table_y0, table_y1):
@@ -161,6 +171,25 @@ for i, level in enumerate(rom.LEVELS):
                 if te != 0:
                     screen = te & 0x0F
                     tilechunks = [readbyte(rom.BANK6, tiles_begin + 20*screen + r) for r in range(20)]
-                    pasteScreen(out, i, tilechunks, (xi-table_x0)*8*5*4, (yi-table_y0)*4*8*4, screen >= screenc)
+                    screenxpx = (xi-table_x0)*8*5*4
+                    screenypx = (yi-table_y0)*4*8*4
+                    pasteScreen(out, i, tilechunks, screenxpx, screenypx, screen >= screenc)
                     
+                    # draw entities
+                    for cat, ents in enumerate(entstable[xi][yi]):
+                        color = ENTPALETTES[cat]
+                        for ent in ents:
+                            if screen < screenc:
+                                entx = ent["x"]
+                                enty = ent["y"]
+                                entt = ent["type"]
+                                name = f"{entt:02X}" if entt not in rom.Entities else rom.Entities[entt]
+                                for offset, col in zip([0], [color]):
+                                    _x = screenxpx + entx + offset
+                                    _y = screenypx + enty + offset
+                                    ImageDraw.Draw(outents).line((_x - ENTCROSSSIZE, _y, _x + ENTCROSSSIZE, _y), fill=col)
+                                    ImageDraw.Draw(outents).line((_x, _y - ENTCROSSSIZE, _x, _y + ENTCROSSSIZE), fill=col)
+                                    ImageDraw.Draw(outents).text((_x+4, _y), name, fill=col)
+                    
+        out.paste(outents, (0, 0), outents)
         out.save(os.path.join(dir, f"{level}_{sublevel}.png"))

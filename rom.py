@@ -6,8 +6,11 @@ def romaddr(bank, addr):
 def readbyte(bank, addr):
     return data[romaddr(bank, addr)]
     
-def readword(bank, addr):
-    return readbyte(bank, addr) + 0x100 * readbyte(bank, addr+1)
+def readword(bank, addr, littleEndian=True):
+    if littleEndian:
+        return readbyte(bank, addr) + 0x100 * readbyte(bank, addr+1)
+    else:
+        return readbyte(bank, addr+1) + 0x100 * readbyte(bank, addr)
 
 def readtableword(bank, addr, arg0, *args):
     for i in [arg0] + list(args):
@@ -73,7 +76,9 @@ def get_screensbuff_boundingbox(arr):
                     max_col = j
     return min_row, max_row+1, min_col, max_col+1,
 
-# returns [(entc, offset, entstart) for each category]
+# returns [(entcount, offset, entstart) for each category]
+# To be honest, I'm not really sure what the offset field is for, but it's in the ROM,
+# and it's often equal to entstart minus (base of entity list for sublevel-entcat)
 def read_ent_slices(bank, addr):
     retv = []
     for i in range(3):
@@ -101,20 +106,21 @@ def get_entities_in_screens(level, sublevel):
     for x in range(16):
         for y in range(16):
             s = screens[x][y]
-            if s != 0 and s is None:
+            if s != 0 and entstable[x][y] is None:
                 sid = s & 0xf
-                stype = s >> 8
+                stype = s >> 4
                 
                 # A is left/top of a long room
                 # B is a non-scrolling room
                 # 9 is right/bottom of long room
                 if stype not in [0xA, 0xB, 0x9]:
                     continue
-                flooddir = {0xA: -1, 0xB: 0, 0x9: 1}[stype]
+                
+                flooddir = {0xA: 1, 0xB: 0, 0x9: -1}[stype]
                 flooddirx = 0 if scrolldir == 1 else flooddir
                 flooddiry = 0 if scrolldir == 0 else flooddir
                 endflood = {0xA: 0x9, 0xB: 0xB, 0x9: 0xA}[stype]
-                entsize = {0xA: 6, 0xB: 4, 0x9: 6}
+                entsize = {0xA: 6, 0xB: 4, 0x9: 6}[stype]
                 
                 if sid >= maxsid:
                     continue
@@ -122,18 +128,25 @@ def get_entities_in_screens(level, sublevel):
                 # find start of 'room' in entity table for each entcat
                 entslices = read_ent_slices(BANK3, readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel, sid))
                 entroomstart = []
-                entroomsend = []
+                entroomend = []
+                
+                #if level == 2 and sublevel == 2 and sid == 3:
+                #    breakpoint()
+                
                 for i, slice in enumerate(entslices):
                     start = slice[2]
                     if start is None:
                         entroomstart.append(None)
-                        entroomsend.append(None)
+                        entroomend.append(None)
+                    elif stype == 0xB:
+                        end = start + slice[0] * entsize
+                        entroomstart.append(start)
+                        entroomend.append(end)
                     else:
                         end = start
                         # find start
                         while True:
-                            b = readbyte(BANK3, start)
-                            if b >= 0x80 or start-1 == sublevelentstartbycat[i]:
+                            if start-1 == sublevelentstartbycat[i] or readbyte(BANK3, start-1) >= 0x80:
                                 entroomstart.append(start)
                                 break
                             else:
@@ -141,8 +154,8 @@ def get_entities_in_screens(level, sublevel):
                         # find end
                         while True:
                             b = readbyte(BANK3, end)
-                            if b >= 0x80:
-                                entroomsend.append(end)
+                            if b >= 0xF0:
+                                entroomend.append(end)
                                 break
                             else:
                                 end += entsize
@@ -151,9 +164,11 @@ def get_entities_in_screens(level, sublevel):
                 _x = x
                 _y = y
                 while True:
-                    floodsid = screens[_x][_y]
                     ents = []
-                    for start, end in zip(entroomstart, entroomsend):
+                    for start, end in zip(entroomstart, entroomend):
+                        ents.append([])
+                        if start is None or end is None:
+                            continue
                         # get ents in this cat(egory) on this screen by looking between start and end
                         for e in range(start, end, entsize):
                             if entsize == 4:
@@ -161,7 +176,7 @@ def get_entities_in_screens(level, sublevel):
                                 type = readbyte(BANK3, e+1)
                                 ex = readbyte(BANK3, e+2)
                                 ey = readbyte(BANK3, e+3)
-                                ents.push_back({
+                                ents[-1].append({
                                     "x":ex,
                                     "y":ey,
                                     "slot":slot,
@@ -171,38 +186,44 @@ def get_entities_in_screens(level, sublevel):
                                     "margin":None
                                 })
                             else:
-                                scroll = readword(BANK3, e)
+                                scroll = readword(BANK3, e, False)
                                 slot = readbyte(BANK3, e+2)
                                 type = readbyte(BANK3, e+3)
                                 ex = readbyte(BANK3, e+4)
                                 ey = readbyte(BANK3, e+5)
                                 if scrolldir == 0:
-                                    escreen = (scroll >> 8) + (ex + scroll & 0xff) // 0xa0
-                                    if escreen != floodsid:
+                                    # horizontal
+                                    escreen = ((scroll >> 8) & 0x7f) + (ex + (scroll & 0xff)) // 0xa0
+                                    if escreen != _x:
                                         continue
-                                    epos = (ex + scroll & 0xff) % 0xa0
-                                    ents.push_back({
+                                    epos = (ex + (scroll & 0xff)) % 0xa0
+                                    ents[-1].append({
                                         "x":epos,
                                         "y":ey,
+                                        "screen-x": escreen,
+                                        "screen-y": y,
                                         "slot":slot,
                                         "type":type,
-                                        "margin": ex,
+                                        "margin-x": ex,
                                     })
                                 else:
-                                    escreen = (scroll >> 8) + (ey + scroll & 0xff) // 0x80
-                                    if escreen != floodsid:
+                                    # vertical
+                                    escreen = ((scroll >> 8) & 0x7f) + (ey + (scroll & 0xff)) // 0x80
+                                    if escreen != _y:
                                         continue
-                                    epos = (ey + scroll & 0xff) % 0xa0
-                                    ents.push_back({
+                                    epos = (ey + (scroll & 0xff)) % 0x80
+                                    ents[-1].append({
                                         "x":ex,
                                         "y":epos,
+                                        "screen-x": x,
+                                        "screen-y": escreen,
                                         "slot":slot,
                                         "type":type,
-                                        "margin": ey,
+                                        "margin-y": ey,
                                     })
                     entstable[_x][_y] = ents
                                     
-                    if screens[_x][_y] >> 8 == endflood:
+                    if screens[_x][_y] >> 4 == endflood:
                         break
                     else:
                         _x += flooddirx
@@ -215,6 +236,13 @@ def get_entities_in_screens(level, sublevel):
                             _y = 0xf
                         if _y >= 0x10:
                             _y = 0
+    
+    # replace Nones with Empties
+    for erow in entstable:
+        for i, ents in enumerate(erow):
+            if ents is None:
+                erow[i] = []
+    
     return entstable
 
 def get_entry_end(table, bank, level, substage=None, screen=None, drac3_size=None):
@@ -334,7 +362,7 @@ def readrom(_data):
 
     Entities = {
         0x00: "NONE",
-        0x01: "ITM_CROSSAXE",
+        0x01: "ITM_CROSS" if ROMTYPE == "jp" else "ITM_AXE",
         0x02: "ITM_HOLYWATER",
         0x03: "ITM_COIN",
         0x04: "ITM_WHIP_FIRE",
