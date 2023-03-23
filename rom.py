@@ -408,6 +408,7 @@ def readrom(_data):
         0x44: "LOOSEPULLEY_44",
         0x45: "BOSS_DARKSIDE",
         0x48: "ENM_PANAGUCHI_VMOV",
+        0x4A: "SPIKEFLOOR",
         0x4B: "PULLEY",
         0x4E: "BGFLAME",
         
