@@ -125,12 +125,13 @@ def get_entities_in_screens(level, sublevel):
                 if sid >= maxsid:
                     continue
                 
+                
                 # find start of 'room' in entity table for each entcat
                 entslices = read_ent_slices(BANK3, readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel, sid))
                 entroomstart = []
                 entroomend = []
                 
-                #if level == 2 and sublevel == 2 and sid == 3:
+                #if level == 2 and sublevel == 2 and sid == 4:
                 #    breakpoint()
                 
                 for i, slice in enumerate(entslices):
@@ -368,7 +369,6 @@ def readrom(_data):
         0x04: "ITM_WHIP_FIRE",
         0x05: "ITM_HEARTSMALL",
         0x06: "ITM_HEARTBIG",
-        0x0F: "ENM_PANAGUCHI_0F",
         
         0x08: "WALL_1UP",
         0x09: "ENM_RAT_09",
@@ -378,28 +378,44 @@ def readrom(_data):
         0x0D: "ENM_PANAGUCHI_0D",
         0x0E: "ENM_RAT_0E",
         
+        0x10: "ROPESPIKEBALL",
+        0x12: "VMOVPLAT",
+        0x13: "HMOVPLAT",
         0x1C: "ENM_SKELETON_1C",
         0x1E: "ENM_FORNEUS",
         0x1F: "ENM_BAT_1F",
         
         0x20: "ENM_SKELETON_20",
         0x21: "ENM_MUDMAN",
-        0x22: "BOSS_TWIN_TRIDENT",
+        0x22: "BOSS_TWINTRIDENT",
+        0x23: "CRACKBLOCK",
         0x24: "BG_ANIM",
         0x25: "SPAWNEYE_RIGHT",
         0x26: "SPAWNEYE_LEFT",
+        0x2B: "SPIKEWALL",
         
+        0x31: "SPIKEWALL2",
+        0x32: "TMOVPLAT",
         0x33: "ENM_KNIGHT",
         0x34: "ENM_RAVEN",
         0x35: "ITM_WHIP_CHAIN",
         0x37: "ENM_WATER_CREEP",
-        0x3C: "SPAWNEYE_ABOVE",
+        0x3B: "SPAWNEYE_TOP_3B",
+        0x3C: "SPAWNEYE_TOP_3C",
         
         0x41: "ENM_DAGGER",
+        0x43: "LOOSEPULLEY_43",
+        0x44: "LOOSEPULLEY_44",
         0x45: "BOSS_DARKSIDE",
+        0x48: "ENM_PANAGUCHI_VMOV",
+        0x4B: "PULLEY",
         0x4E: "BGFLAME",
         
         0x53: "BOSS_ANGEL_MUMMY",
+        0x56: "EXTRUDER_RIGHT",
+        0x57: "EXTRUDER_LEFT",
+        0x58: "EXTRUDER_CTRL",
+        0x5B: "ENM_NIGHTSTALKER",
         0x5D: "ENM_BEATLE",
         
         0x60: "BOSS_IRON_DOLL",

@@ -187,8 +187,8 @@ for i, level in enumerate(rom.LEVELS):
                                 for offset, col in zip([0], [color]):
                                     _x = screenxpx + entx + offset
                                     _y = screenypx + enty + offset
-                                    ImageDraw.Draw(outents).line((_x - ENTCROSSSIZE, _y, _x + ENTCROSSSIZE, _y), fill=col)
-                                    ImageDraw.Draw(outents).line((_x, _y - ENTCROSSSIZE, _x, _y + ENTCROSSSIZE), fill=col)
+                                    ImageDraw.Draw(outents).line((screenxpx + min(entx, 0xa0) + offset - ENTCROSSSIZE, _y, _x + ENTCROSSSIZE, _y), fill=col)
+                                    ImageDraw.Draw(outents).line((_x, screenypx + min(enty, 0x80) + offset - ENTCROSSSIZE, _x, _y + ENTCROSSSIZE), fill=col)
                                     anchor = ""
                                     if entx >= 0x78:
                                         anchor = "r"
@@ -197,6 +197,7 @@ for i, level in enumerate(rom.LEVELS):
                                         anchor = "l"
                                     if enty >= 0x60:
                                         anchor += "b"
+                                        _y = screenypx + min(enty,0x80) + offset
                                         _y -= 12
                                     else:
                                         anchor += "t"
