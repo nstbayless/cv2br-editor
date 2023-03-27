@@ -115,7 +115,7 @@ def write_chunks_image(level):
     MARGIN=2
     out = Image.new(mode="RGB", size=(dim * 16 + MARGIN * 15, dim * 16 + MARGIN * 15))
     
-    tilec = rom.get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, level) - readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
+    tilec = rom.get_entry_end(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level) - readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
     assert tilec > 0, f"{levelname}: {tilec}"
     tilec = tilec // 0x10 + 1
     for i in range(16):
@@ -157,7 +157,7 @@ for i, level in enumerate(rom.LEVELS):
                 print(s)
         
         tiles_begin = readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, i, sublevel)
-        tiles_end = rom.get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, sublevel)
+        tiles_end = rom.get_entry_end(rom.BANK2, rom.LEVTAB_TILES_BANK2, i, sublevel)
         assert tiles_end > tiles_begin
         assert (tiles_begin - tiles_end) % 20 == 0
         screenc = (tiles_end - tiles_begin) // 20

@@ -22,7 +22,7 @@ def readtablebyte(bank, addr, arg0, *args):
     if len(args) > 1:
         addr = readtableword(bank, addr, *args[:-1])
     return readbyte(bank, addr + args[-1])
-    
+
 # returns startx, starty, scrolldir, then a 16x16 array of screen bytes
 def produce_sublevel_screen_arrangement(level, sublevel):
     scrolldir = readtablebyte(BANK2, LEVEL_SCROLLDIR_TABLE, level, sublevel)
@@ -99,7 +99,7 @@ def read_ent_slices(bank, addr):
 # We need to floodfill a bit.
 # We consider a "room" to be a consecutive intra-scrolling sequence of screens.
 def get_entities_in_screens(level, sublevel):
-    maxsid = (get_entry_end(SCREEN_ENT_TABLE, BANK3, level, sublevel) - readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel)) // 2
+    maxsid = (get_entry_end(BANK3, SCREEN_ENT_TABLE, level, sublevel) - readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel)) // 2
     sublevelentstartbycat = [readtableword(BANK3, LEVTABS_AND_NAMES[i][0], level, sublevel) for i in range(3)]
     startx, starty, scrolldir, screens = produce_sublevel_screen_arrangement(level, sublevel)
     entstable = [[None for j in range(16)] for i in range(16)]
@@ -246,7 +246,7 @@ def get_entities_in_screens(level, sublevel):
     
     return entstable
 
-def get_entry_end(table, bank, level, substage=None, screen=None, drac3_size=None):
+def get_entry_end(bank, table, level, substage=None, screen=None, drac3_size=None):
     if drac3_size is None:
         if table == LEVTAB_TILES_BANK2 and bank == BANK2:
             drac3_size = 5*20 # this is a guess

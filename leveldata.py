@@ -112,7 +112,7 @@ with open("leveldata.asm", "w") as f:
                 else:
                     writeti(f"; addr={rom.BANK6:X}:{addr2:04X}")
                 writeti(f"{level}_{substage}_Tiles:")
-                tiles = rom.get_entry_end(rom.LEVTAB_TILES_BANK2, rom.BANK2, i, substage) - addr2
+                tiles = rom.get_entry_end(rom.BANK2, rom.LEVTAB_TILES_BANK2, i, substage) - addr2
                 if tiles <= 0:
                     breakpoint()
                 assert tiles > 0
@@ -154,7 +154,7 @@ with open("leveldata.asm", "w") as f:
             tilec = 0x82 * 0x10 # this is a guess
         else:
             #tilec = (tilechunkmaxid[i]-3) * 0x10 #
-            tilec = rom.get_entry_end(rom.LEVTAB_TILES4x4_BANK2, rom.BANK2, i) - addr
+            tilec = rom.get_entry_end(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, i) - addr
         assert tilec % 0x10 == 0
         
         for i in range(1, tilec//0x10+1):
@@ -316,7 +316,7 @@ endm
         if level is not None:
             for sublevel in range(rom.SUBSTAGECOUNT[i]):
                 screen_ents_begin = rom.readtableword(rom.BANK3, rom.SCREEN_ENT_TABLE, i, sublevel)
-                screen_ents_end = rom.get_entry_end(rom.SCREEN_ENT_TABLE, rom.BANK3, i, sublevel)
+                screen_ents_end = rom.get_entry_end(rom.BANK3, rom.SCREEN_ENT_TABLE, i, sublevel)
                 screenc = (screen_ents_end - screen_ents_begin)//2
                 writese("")
                 if i == 1 and sublevel == 0:
