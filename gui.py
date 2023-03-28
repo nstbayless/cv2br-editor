@@ -27,6 +27,7 @@ class UndoBuffer:
         self.idx = 0
         self.buff = []
         self.app = app
+        self.max = 1023
     
     def undo(self):
         self.idx -= 1
@@ -55,6 +56,9 @@ class UndoBuffer:
         self.idx += 1
         self.buff.append(UAction(do, undo, restorecontext))
         self.buff[-1].do(self.app)
+        if self.idx >= self.max:
+            self.idx -= 1
+            self.buff[:1] = []
 
 class VRam:
     def __init__(self, j, nes):
@@ -63,8 +67,6 @@ class VRam:
         self.tileset = [QImage(QSize(8, 8), QImage.Format_RGB32) for i in range(0x200)]
         self.defimg = QImage(QSize(8, 8), QImage.Format_RGB32)
         self.defimg.fill(QColor(0xff, 0x00, 0xff))
-        for img in self.tileset:
-            img.fill(Qt.white)
         self.cached_vram_descriptor = None
         
     def getVramBGTile(self, tileidx):
@@ -80,7 +82,6 @@ class VRam:
         def readbyte(srcbank, addr):
             return self.nes[0x4000 * srcbank + (addr)%0x4000]
 
-        # fill the image with random colors
         for y in range(8):
             b1 = readbyte(srcbank, srcaddr + y*2)
             b2 = readbyte(srcbank, srcaddr + y*2 + 1)
@@ -95,6 +96,10 @@ class VRam:
     def getDefaultImage(self):
         return self.defimg
         
+    def clearVram(self):
+        for i in range(0x200):
+            self.tileset[i] = self.getDefaultImage()
+        
     def loadVramFromBuffer(self, buff):
         for entry in buff:
             destaddr = entry.destaddr
@@ -107,6 +112,12 @@ class VRam:
         if self.cached_vram_descriptor == desc:
             return
         self.cached_vram_descriptor = desc
+        self.clearVram()
+        
+        # not sure what loads tile 0x100 to white (maybe nothing)
+        # but it should be white.
+        self.tileset[0x100] = QImage(QSize(8, 8), QImage.Format_RGB32)
+        self.tileset[0x100].fill(Qt.white)
         
         self.loadVramFromBuffer(self.j.tileset_common)
         self.loadVramFromBuffer(self.j.levels[level].tileset)
@@ -121,25 +132,16 @@ def paintTile(painter, vram, x, y, tileidx, scale):
     f = math.floor
     painter.drawImage(QRect(f(x), f(y), f(x2 - x + 1), f(y2 - y + 1)), img)
 
-class ChunkSelectorWidget(QWidget):
+class ChunkWidget(QWidget):
     width=8*4
-    def __init__(self, id, parent=None, scale=3):
+    def __init__(self, parent=None, scale=4, fixed=False):
         super().__init__(parent)
         self.app = parent
         self.scale = scale
-        self.id = id
-        self.setFixedWidth(scale * 8 * 4)
-        self.setFixedHeight(scale * 8 * 4)
-    
-    def isSelected(self):
-        level, sublevel, screen = self.app.getLevel()
-        return self.app.chunkSelected.get(level, None) == self.id
-        
-    def mousePressEvent(self, event):
-        level, sublevel, screen = self.app.getLevel()
-        chunks = model.getLevelChunks(self.app.j, level)
-        if self.id < len(chunks):
-            self.app.setChunk(self.id)
+        if fixed:
+            self.setFixedWidth(scale * 8 * 4)
+            self.setFixedHeight(scale * 8 * 4)
+        self.id = 0
     
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -157,19 +159,139 @@ class ChunkSelectorWidget(QWidget):
                     x = ci * 8 * self.scale
                     y = cj * 8 * self.scale
                     paintTile(painter, vram, x, y, tileidx, self.scale)
+
+class ChunkEdit(ChunkWidget):
+    width=8*4
+    def __init__(self, parent=None, restoreTab=None, scale=5):
+        super().__init__(parent, scale, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setMouseTracking(True)
+        self.hoverPos = None
+        self.gridSpacing = 8
+        self.restoreTab = restoreTab
+    
+    def mouseMoveEvent(self, event):
+        prevHoverPos = self.hoverPos
+        self.hoverPos = (math.floor(event.position().x() / self.gridSpacing / self.scale), math.floor(event.position().y() / self.gridSpacing / self.scale))
+        if self.hoverPos[0] < 0 or self.hoverPos[0] * self.gridSpacing >= 4*8:
+            self.hoverPos = None
+        elif self.hoverPos[1] < 0 or self.hoverPos[1] * self.gridSpacing >= 4*8:
+            self.hoverPos = None
+        if prevHoverPos != self.hoverPos:
+            self.update()
         
+    def leaveEvent(self, event):
+        self.hoverPos = None
+        self.update()
+        
+    def getRestoreContext(self):
+        level, sublevel, screen = self.app.getLevel()
+        chidx = self.app.chunkSelected.get(level, None)
+        def restore(app):
+            assert app.sender() not in app.qcb_levels + app.qcb_sublevels + app.qcb_screens
+            app.setLevel(level-1)
+            app.setChunk(chidx)
+            if self.restoreTab is not None:
+                app.tabs.setCurrentWidget(self.restoreTab)
+        
+        return restore
+            
+    def mousePressEvent(self, event):
+        self.mouseMoveEvent(event)
+        level = self.app.sel_level
+        tidx = self.app.tileSelected.get(level, None) or 0
+        chidx = self.app.chunkSelected.get(level, None)
+        chunks = model.getLevelChunks(self.app.j, level)
+        if self.hoverPos is not None and chidx is not None and chidx < len(chunks) and chidx > 0:
+            chunk = chunks[chidx]
+            i, j = self.hoverPos
+            idx = j*4 + i
+            prev = chunk[idx]
+            if event.button() == Qt.LeftButton and chidx and tidx is not None:
+                self.app.undoBuffer.push(
+                    lambda app: lset(model.getLevelChunks(app.j, level)[chidx], idx, tidx),
+                    lambda app: lset(model.getLevelChunks(app.j, level)[chidx], idx, prev),
+                    self.getRestoreContext()
+                )
+            elif event.button() == Qt.RightButton:
+                self.app.setTile(None)
+            elif event.button() == Qt.MiddleButton:
+                self.app.setChunk(chunk[idx])
+        self.update()
+    
+    def paintEvent(self, event):
+        level, sublevel, screen = self.app.getLevel()
+        self.id = self.app.chunkSelected.get(level, None) or 0
+        super().paintEvent(event)
+        painter = QPainter(self)
+        if self.hoverPos is not None and self.app.tileSelected.get(level, None) is not None and self.id > 0:
+            painter.setCompositionMode(QPainter.CompositionMode_Multiply)
+            paintTile(painter, self.app.vram, self.hoverPos[0]*8*self.scale, self.hoverPos[1]*8*self.scale, self.app.tileSelected[level], self.scale)
+            painter.fillRect(QRect(8*self.hoverPos[0]*self.scale, 8*self.hoverPos[1]*self.scale, 8*self.scale, 8*self.scale), QColor(128, 128, 255))
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        
+        # border
+        pen = QPen(Qt.black)
+        pen.setWidth(2)
+        painter.drawRect(QRect(0, 0, self.scale * 8 * 4, self.scale * 8 * 4))
+
+class ChunkSelectorWidget(ChunkWidget):
+    width=8*4
+    def __init__(self, id, parent=None, scale=3):
+        super().__init__(parent, scale, True)
+        self.id = id
+    
+    def isSelected(self):
+        level, sublevel, screen = self.app.getLevel()
+        return self.app.chunkSelected.get(level, None) == self.id
+        
+    def mousePressEvent(self, event):
+        level, sublevel, screen = self.app.getLevel()
+        chunks = model.getLevelChunks(self.app.j, level)
+        if self.id < len(chunks):
+            self.app.setChunk(self.id)
+    
+    def paintEvent(self, event):
+        super().paintEvent(event)
         if self.isSelected():
+            painter = QPainter(self)
             painter.setCompositionMode(QPainter.CompositionMode_Multiply)
             painter.fillRect(QRect(0, 0, 8*4*self.scale, 8*4*self.scale), QColor(128, 128, 255))
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
+class TileSelectorWidget(QWidget):
+    width = 8
+    def __init__(self, id, parent=None, scale=4):
+        super().__init__(parent)
+        self.app = parent
+        self.id = id
+        self.scale = scale
+        self.setFixedSize(scale * 8, scale * 8)
+    
+    def isSelected(self):
+        level, sublevel, screen = self.app.getLevel()
+        return self.app.tileSelected.get(level, None) == self.id
+        
+    def mousePressEvent(self, event):
+        level, sublevel, screen = self.app.getLevel()
+        if self.id < 0x100:
+            self.app.setTile(self.id)
+            
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        paintTile(painter, self.app.vram, 0, 0, self.id, self.scale)
+        if self.isSelected():
+            painter.setCompositionMode(QPainter.CompositionMode_Multiply)
+            painter.fillRect(QRect(0, 0, 8*self.scale, 8*self.scale), QColor(128, 128, 255))
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
 class SelectorPanel(QScrollArea):
-    def __init__(self, parent, type=ChunkSelectorWidget):
+    def __init__(self, parent, type=ChunkSelectorWidget, scale=2, w=4, h=0x40):
         super().__init__()
         self.app = parent
-        self.scale = 2
-        self.w = 4
-        self.h = 0x100//self.w
+        self.scale = scale
+        self.w = w
+        self.h = h
         self.type = type
         self.margin = 4
         self.spacing = 3
@@ -265,17 +387,17 @@ class ScreenTileWidget(ScreenWidget):
     def mousePressEvent(self, event):
         self.mouseMoveEvent(event)
         chidx = self.app.chunkSelected.get(self.app.sel_level, None)
+        level, sublevel, screen = self.app.getLevel()
         jl, jsl, js = self.app.getLevelJ()
         if self.hoverPos is not None:
             i, j = self.hoverPos
             prev = js.data[j][i]
             if event.button() == Qt.LeftButton and chidx is not None:
                 self.app.undoBuffer.push(
-                    lambda app: lset(js.data[j], i, chidx),
-                    lambda app: lset(js.data[j], i, prev),
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, chidx),
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, prev),
                     self.getRestoreContext()
                 )
-                js.data[j][i] = chidx
             elif event.button() == Qt.RightButton:
                 self.app.setChunk(None)
             elif event.button() == Qt.MiddleButton:
@@ -436,7 +558,10 @@ class MainWindow(QMainWindow):
         self.screenTabs = []
         self.lastScreenTab = None
         self.chunkSelected = {}
+        self.tileSelected = {}
         self.chunkSelectors = []
+        self.tileSelectors = []
+        self.chunkEdit = None
         self.setWindowTitle("RevEdit")
         self.defineActions()
         self.defineMenus()
@@ -477,6 +602,7 @@ class MainWindow(QMainWindow):
         self.actRedo2 = QAction("&Redo", self)
         self.actRedo2.triggered.connect(self.redo)
         self.actRedo2.setShortcut(QKeySequence("ctrl+shift+z"))
+        self.addAction(self.actRedo2)
         
     def defineMenus(self):
         menu = self.menuBar()
@@ -504,7 +630,6 @@ class MainWindow(QMainWindow):
             functools.partial(self.defineEntityTab, "Items"),
             functools.partial(self.defineEntityTab, "Misc"),
             self.defineChunksTab,
-            self.defineChunkTab
         ]
         for i, (label, define) in enumerate(zip(TAB_LABELS, TAB_DEFS)):
             tab = QWidget()
@@ -533,10 +658,24 @@ class MainWindow(QMainWindow):
         vlay.addWidget(self.screenGrids[-1])
         
     def defineChunksTab(self, tab):
-        self.defineWidgetLayoutWithLevelDropdown(tab, 0)
-    
-    def defineChunkTab(self, tab):
-        self.defineWidgetLayoutWithLevelDropdown(tab, 0)
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 0)
+        hlay = QHBoxLayout()
+        
+        # chunk selector
+        self.chunkSelectors.append(SelectorPanel(self, ChunkSelectorWidget))
+        hlay.addWidget(self.chunkSelectors[-1])
+        
+        # chunk display
+        self.chunkEdit = ChunkEdit(self, tab)
+        hlay.addWidget(self.chunkEdit)
+        vlay.addLayout(hlay)
+        
+        # padding
+        hlay.addWidget(QWidget())
+        
+        # tile selector
+        self.tileSelectors.append(SelectorPanel(self, TileSelectorWidget, 4, 0x4, 0x20))
+        hlay.addWidget(self.tileSelectors[-1])
         
     # depth=0: level only
     # depth=1: level and sublevel
@@ -582,6 +721,12 @@ class MainWindow(QMainWindow):
                 qcb.setCurrentIndex(level)
                 qcb.blockSignals(False)
         
+        for selector in self.chunkSelectors + self.tileSelectors:
+            for widget in selector.widgets:
+                widget.update()
+        
+        self.chunkEdit.update()
+        
         self.setSublevel(self.sel_sublevel.get(self.sel_level, 0), True)
     
     def setSublevel(self, sublevel, levelChanged=False):
@@ -624,10 +769,26 @@ class MainWindow(QMainWindow):
             widget.update()
         
         self.layGrid.update()
-        
+    
+    def setTile(self, tile):
+        prevSelected = self.tileSelected.get(self.sel_level, None)
+        self.tileSelected[self.sel_level] = tile
+        if self.chunkEdit is not None:
+            self.chunkEdit.update()
+        for selector in self.tileSelectors:
+            if prevSelected is not None:
+                selector.widgets[prevSelected].update()
+            if tile is not None:
+                selector.widgets[tile].update()
+                selector.ensureWidgetVisible(selector.widgets[tile])
+    
     def setChunk(self, chunk):
         prevSelected = self.chunkSelected.get(self.sel_level, None)
         self.chunkSelected[self.sel_level] = chunk
+        if self.chunkEdit is not None:
+            self.chunkEdit.update()
+        for screen in self.screenGrids:
+            screen.update()
         for selector in self.chunkSelectors:
             if prevSelected is not None:
                 selector.widgets[prevSelected].update()
