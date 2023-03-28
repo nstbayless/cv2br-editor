@@ -6,11 +6,7 @@ from PIL import Image, ImageDraw
 
 PALETTE = rom.PALETTE
 
-ENTPALETTES = [
-    (0xff, 0xa0, 0x40), # misc
-    (0x40, 0x40, 0xff), # enemies
-    (0x90, 0x80, 0x20), # items
-]
+ENTPALETTES = rom.ENTPALETTES
 
 ENTCROSSSIZE = 4
 

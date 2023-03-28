@@ -242,7 +242,7 @@ def get_entities_in_screens(level, sublevel):
     for erow in entstable:
         for i, ents in enumerate(erow):
             if ents is None:
-                erow[i] = []
+                erow[i] = [[], [], []]
     
     return entstable
 
@@ -427,9 +427,21 @@ def readrom(_data):
         0x73: "BOSS_DRACULA",
     }
 
+def getEntityName(id):
+    name = f"${id:02X}"
+    if id in Entities:
+        name += ":" + Entities.get(id)
+    return name
+
 PALETTE = [
     (0xff, 0xff, 0xff),
     (0xb0, 0xb0, 0xb0),
     (0x40, 0x40, 0x40),
     (0, 0, 0),
+]
+
+ENTPALETTES = [
+    (0xff, 0xa0, 0x40), # misc
+    (0x40, 0x40, 0xff), # enemies
+    (0x90, 0x80, 0x20), # items
 ]

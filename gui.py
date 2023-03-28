@@ -5,22 +5,31 @@ import math
 from PySide6.QtWidgets import \
     QApplication, QMainWindow, QPushButton, QLabel, \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
-    QComboBox, QGridLayout, QScrollArea
-from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QImage, QKeySequence
+    QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
+    QAbstractItemView
+from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
 from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect
 import functools
+
+def plural(i, singular, plural=None):
+    if plural is None:
+        plural = singular + 's'
+    return singular if i == 1 else plural
 
 # sets value in list
 def lset(l, i, v):
     l[i] = v
+    
+CATS = ["misc", "enemies", "items"]
 
 # Undoable Action
 class UAction:
-    def __init__(self, do, undo, restorecontext=None):
+    def __init__(self, do, undo, restorecontext=None, refreshcontext=None):
         self.type = type
         self.do = do
         self.undo = undo
         self.restorecontext = restorecontext if restorecontext is not None else (lambda app: None)
+        self.refreshcontext = refreshcontext if refreshcontext is not None else (lambda app: None)
         
 class UndoBuffer:
     def __init__(self, app):
@@ -37,6 +46,7 @@ class UndoBuffer:
             ua = self.buff[self.idx]
             ua.restorecontext(self.app)
             ua.undo(self.app)
+            ua.refreshcontext(self.app)
         
     def redo(self):
         self.idx += 1
@@ -46,19 +56,24 @@ class UndoBuffer:
             ua = self.buff[self.idx-1]
             ua.restorecontext(self.app)
             ua.do(self.app)
+            ua.refreshcontext(self.app)
     
     def clear(self):
         self.idx = 0
         self.buff = []
 
-    def push(self, do, undo, restorecontext=None):
+    def push(self, do, undo, restorecontext=None, refreshcontext=None):
         self.buff = self.buff[:self.idx]
         self.idx += 1
-        self.buff.append(UAction(do, undo, restorecontext))
-        self.buff[-1].do(self.app)
+        self.buff.append(UAction(do, undo, restorecontext, refreshcontext))
+        
+        # maximum size
         if self.idx >= self.max:
             self.idx -= 1
             self.buff[:1] = []
+            
+        self.buff[-1].do(self.app)
+        self.buff[-1].refreshcontext(self.app)
 
 class VRam:
     def __init__(self, j, nes):
@@ -195,6 +210,14 @@ class ChunkEdit(ChunkWidget):
                 app.tabs.setCurrentWidget(self.restoreTab)
         
         return restore
+        
+    def editable(self):
+        level = self.app.sel_level
+        chidx = self.app.chunkSelected.get(level, None)
+        chunks = model.getLevelChunks(self.app.j, level)
+        if self.app.j.levels[level].get("chunks", None) is None:
+            return False
+        return chidx is not None and chidx < len(chunks) and chidx > 0
             
     def mousePressEvent(self, event):
         self.mouseMoveEvent(event)
@@ -202,12 +225,12 @@ class ChunkEdit(ChunkWidget):
         tidx = self.app.tileSelected.get(level, None) or 0
         chidx = self.app.chunkSelected.get(level, None)
         chunks = model.getLevelChunks(self.app.j, level)
-        if self.hoverPos is not None and chidx is not None and chidx < len(chunks) and chidx > 0:
+        if self.hoverPos is not None and chidx is not None:
             chunk = chunks[chidx]
             i, j = self.hoverPos
             idx = j*4 + i
             prev = chunk[idx]
-            if event.button() == Qt.LeftButton and chidx and tidx is not None:
+            if self.editable() and event.button() == Qt.LeftButton and chidx and tidx is not None:
                 self.app.undoBuffer.push(
                     lambda app: lset(model.getLevelChunks(app.j, level)[chidx], idx, tidx),
                     lambda app: lset(model.getLevelChunks(app.j, level)[chidx], idx, prev),
@@ -216,7 +239,7 @@ class ChunkEdit(ChunkWidget):
             elif event.button() == Qt.RightButton:
                 self.app.setTile(None)
             elif event.button() == Qt.MiddleButton:
-                self.app.setChunk(chunk[idx])
+                self.app.setTile(chunk[idx])
         self.update()
     
     def paintEvent(self, event):
@@ -224,7 +247,7 @@ class ChunkEdit(ChunkWidget):
         self.id = self.app.chunkSelected.get(level, None) or 0
         super().paintEvent(event)
         painter = QPainter(self)
-        if self.hoverPos is not None and self.app.tileSelected.get(level, None) is not None and self.id > 0:
+        if self.hoverPos is not None and self.app.tileSelected.get(level, None) is not None and self.editable():
             painter.setCompositionMode(QPainter.CompositionMode_Multiply)
             paintTile(painter, self.app.vram, self.hoverPos[0]*8*self.scale, self.hoverPos[1]*8*self.scale, self.app.tileSelected[level], self.scale)
             painter.fillRect(QRect(8*self.hoverPos[0]*self.scale, 8*self.hoverPos[1]*self.scale, 8*self.scale, 8*self.scale), QColor(128, 128, 255))
@@ -233,7 +256,7 @@ class ChunkEdit(ChunkWidget):
         # border
         pen = QPen(Qt.black)
         pen.setWidth(2)
-        painter.drawRect(QRect(0, 0, self.scale * 8 * 4, self.scale * 8 * 4))
+        painter.drawRect(QRect(0, 0, self.scale * 8 * 4-2, self.scale * 8 * 4-2))
 
 class ChunkSelectorWidget(ChunkWidget):
     width=8*4
@@ -250,6 +273,11 @@ class ChunkSelectorWidget(ChunkWidget):
         chunks = model.getLevelChunks(self.app.j, level)
         if self.id < len(chunks):
             self.app.setChunk(self.id)
+    
+    def mouseDoubleClickEvent(self, event):
+        self.mousePressEvent(event)
+        if self.app.chunkEdit is not None:
+            self.app.tabs.setCurrentWidget(self.app.chunkEdit.restoreTab)
     
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -314,12 +342,13 @@ class SelectorPanel(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
 class ScreenWidget(QWidget):
-    def __init__(self, parent, restoreTab, gridSpacing=8*4):
+    def __init__(self, parent, restoreTab, entityAlpha=0.9, gridSpacing=8*4):
         super().__init__(parent)
         self.restoreTab = restoreTab
         self.app = parent
         self.hoverPos = None
         self.gridSpacing = gridSpacing
+        self.entityAlpha = entityAlpha
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setMouseTracking(True)
         
@@ -354,6 +383,31 @@ class ScreenWidget(QWidget):
     def getScale(self):
         return min(self.width() / (20*8), self.height() / (16*8))
         
+    def paintEntities(self, painter):
+        level, sublevel, screen = self.app.getLevel()
+        jl, jsl, js = self.app.getLevelJ()
+        font = QFont(['Helvetica', 'Arial'], 16)
+        fm = QFontMetrics(font)
+        a = int(256 * self.entityAlpha)
+        padding = 2
+        scale = self.getScale()
+        for icat, cat in enumerate(CATS):
+            for ent in js.get(cat, []):
+                name = rom.getEntityName(ent.type)
+                painter.setFont(font)
+                
+                # backbox
+                rect = fm.boundingRect(name)
+                rect.adjust(-padding, -padding, padding, padding)
+                rect.translate(ent.x * scale - rect.x(), ent.y * scale - rect.y())
+                painter.setPen(Qt.NoPen)
+                painter.fillRect(rect, QColor(0, 0, 0, a*2//3))
+                
+                # text
+                painter.setPen(QColor(*map(lambda x: (x + 255)//2, rom.ENTPALETTES[icat]), a))
+                painter.drawText(rect, Qt.AlignCenter, name)
+        painter.setPen(QColor(Qt.black))
+        
     def paintEvent(self, event):
         squareSize = self.getScale()
         
@@ -361,9 +415,7 @@ class ScreenWidget(QWidget):
         #painter.setRenderHint(QPainter.Antialiasing)
         
         level, sublevel, screen = self.app.getLevel()
-        jl = self.app.j.levels[level]
-        jsl = jl.sublevels[sublevel]
-        screen = jsl.screens[screen]
+        jl, jsl, js = self.app.getLevelJ()
         chunks = model.getLevelChunks(self.app.j, level)
         
         vram = self.app.vram
@@ -371,7 +423,7 @@ class ScreenWidget(QWidget):
         
         for i in range(5):
             for j in range(4):
-                chidx = screen.data[j][i]
+                chidx = js.data[j][i]
                 chunk = chunks[chidx] if chidx < len(chunks) else [-1] * 0x10
                 for ci in range(4):
                     for cj in range(4):
@@ -379,10 +431,13 @@ class ScreenWidget(QWidget):
                         x = (i * 4 + ci) * 8 * squareSize
                         y = (j * 4 + cj) * 8 * squareSize
                         paintTile(painter, vram, x, y, tileidx, squareSize)
+        
+        if self.entityAlpha > 0:
+            self.paintEntities(painter)
 
 class ScreenTileWidget(ScreenWidget):
     def __init__(self, parent, restoreTab):
-        super().__init__(parent, restoreTab)
+        super().__init__(parent, restoreTab, 0)
     
     def mousePressEvent(self, event):
         self.mouseMoveEvent(event)
@@ -393,11 +448,12 @@ class ScreenTileWidget(ScreenWidget):
             i, j = self.hoverPos
             prev = js.data[j][i]
             if event.button() == Qt.LeftButton and chidx is not None:
-                self.app.undoBuffer.push(
-                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, chidx),
-                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, prev),
-                    self.getRestoreContext()
-                )
+                if prev != chidx:
+                    self.app.undoBuffer.push(
+                        lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, chidx),
+                        lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, prev),
+                        self.getRestoreContext()
+                    )
             elif event.button() == Qt.RightButton:
                 self.app.setChunk(None)
             elif event.button() == Qt.MiddleButton:
@@ -559,15 +615,20 @@ class MainWindow(QMainWindow):
         self.lastScreenTab = None
         self.chunkSelected = {}
         self.tileSelected = {}
+        self.entitySelected = {} # maps (level, sublevel, screen) -> (cat, index)
         self.chunkSelectors = []
         self.tileSelectors = []
         self.chunkEdit = None
+        self.entityTab = None
+        self.entitySelector = None
         self.setWindowTitle("RevEdit")
+        # TODO: use pyside6-rcc to build the resources
+        self.setWindowIcon(QIcon("etc/icon.png"))
         self.defineActions()
         self.defineMenus()
         self.defineTabs()
-        self.setLevel(1)
         self.setGeometry(50, 50, 850, 550)
+        self.setLevel(3)
     
     def getLevel(self):
         return self.sel_level, self.sel_sublevel[self.sel_level], self.sel_screen[(self.sel_level, self.sel_sublevel[self.sel_level])]
@@ -590,7 +651,7 @@ class MainWindow(QMainWindow):
         
         self.actSaveAs = QAction("&Save Hack As...", self)
         self.actSaveAs.triggered.connect(functools.partial(self.onFileIO, "hack", 2))
-        self.actSave.setShortcut(QKeySequence("ctrl+shift+s"))
+        self.actSaveAs.setShortcut(QKeySequence("ctrl+shift+s"))
         
         self.actUndo = QAction("&Undo", self)
         self.actUndo.triggered.connect(self.undo)
@@ -621,14 +682,12 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.onChangeTab)
         self.setCentralWidget(self.tabs)
         TAB_LABELS = [
-            "Layout", "Screen", "Enemies", "Items", "Misc", "Chunks"
+            "Layout", "Screen", "Entities", "Chunks"
         ]
         TAB_DEFS = [
             self.defineLevelLayTab,
             self.defineScreenTab,
-            functools.partial(self.defineEntityTab, "Enemies"),
-            functools.partial(self.defineEntityTab, "Items"),
-            functools.partial(self.defineEntityTab, "Misc"),
+            self.defineEntityTab,
             self.defineChunksTab,
         ]
         for i, (label, define) in enumerate(zip(TAB_LABELS, TAB_DEFS)):
@@ -651,11 +710,33 @@ class MainWindow(QMainWindow):
         hlay.addWidget(self.chunkSelectors[-1])
         vlay.addLayout(hlay)
     
-    def defineEntityTab(self, category, tab):
-        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 2)
-        self.screenGrids.append(ScreenWidget(self, tab))
+    def defineEntityTab(self, tab):
         self.screenTabs.append(tab)
-        vlay.addWidget(self.screenGrids[-1])
+        self.entityTab = tab
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 2)
+        hlay = QHBoxLayout()
+        
+        self.screenGrids.append(ScreenWidget(self, tab))
+        hlay.addWidget(self.screenGrids[-1])
+        
+        cvlay = QVBoxLayout()
+        
+        self.entityIDDropdown = QComboBox()
+        for i in range(1,0x80):
+            name = rom.getEntityName(i)
+            self.entityIDDropdown.addItem(name)
+        self.entityIDDropdown.currentIndexChanged.connect(self.setEntityID)
+        cvlay.addWidget(self.entityIDDropdown)
+        
+        self.entitySelector = QListWidget(self)
+        self.entitySelector.setMaximumWidth(240)
+        self.entitySelectorWidgetIDMap = {}
+        self.entitySelector.currentItemChanged.connect(self.onChangeSelectedEntity)
+        self.entitySelector.setSelectionMode(QAbstractItemView.SingleSelection)
+        cvlay.addWidget(self.entitySelector)
+        
+        hlay.addLayout(cvlay)
+        vlay.addLayout(hlay)
         
     def defineChunksTab(self, tab):
         vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 0)
@@ -666,8 +747,20 @@ class MainWindow(QMainWindow):
         hlay.addWidget(self.chunkSelectors[-1])
         
         # chunk display
+        cvlay = QVBoxLayout()
         self.chunkEdit = ChunkEdit(self, tab)
-        hlay.addWidget(self.chunkEdit)
+        cvlay.addWidget(self.chunkEdit)
+        
+        # chunk label
+        self.chunkEditLabel = QLabel()
+        font = self.chunkEditLabel.font()
+        font.setPointSize(10)
+        self.chunkEditLabel.setFont(font)
+        cvlay.addWidget(self.chunkEditLabel)
+        
+        # padding
+        cvlay.addWidget(QWidget())
+        hlay.addLayout(cvlay)
         vlay.addLayout(hlay)
         
         # padding
@@ -676,7 +769,7 @@ class MainWindow(QMainWindow):
         # tile selector
         self.tileSelectors.append(SelectorPanel(self, TileSelectorWidget, 4, 0x4, 0x20))
         hlay.addWidget(self.tileSelectors[-1])
-        
+    
     # depth=0: level only
     # depth=1: level and sublevel
     # depth=2: level, sublevel, screen
@@ -711,7 +804,97 @@ class MainWindow(QMainWindow):
         tab = self.tabs.widget(idx)
         if tab in self.screenTabs:
             self.lastScreenTab = tab
+        if self.chunkEdit is not None and tab == self.chunkEdit.restoreTab:
+            self.updateChunkLabel()
+        if tab == self.entityTab:
+            self.updateScreenEntityList()
+            
+    def onChangeSelectedEntity(self, item):
+        level, sublevel, screen = self.getLevel()
+        if item is not None:
+            self.entitySelected[(level, sublevel, screen)] = self.entitySelectorWidgetIDMap[id(item)]
+        else:
+            self.entitySelected[(level, sublevel, screen)] = None
+        self.updateScreenEntityList()
+    
+    def updateScreenEntityList(self):
+        jl, jsl, js = self.getLevelJ()
+        level, sublevel, screen = self.getLevel()
+        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
+        if self.entitySelector is not None:
+            self.entitySelector.blockSignals(True)
+            self.entityIDDropdown.setEnabled(selectedEntity is not None)
+            selector = self.entitySelector
+            self.entitySelectorWidgetIDMap = {}
+            selector.clear()
+            for cat in CATS:
+                for i, ent in enumerate(js.get(cat, [])):
+                    name = rom.getEntityName(ent.type)
+                    item = QListWidgetItem(name)
+                    selector.addItem(item)
+                    self.entitySelectorWidgetIDMap[id(item)] = (cat, i)
+                    if selectedEntity == (cat, i):
+                        selector.setCurrentItem(item)
+                        if self.sender() != self.entityIDDropdown:
+                            self.entityIDDropdown.blockSignals(True)
+                            self.entityIDDropdown.setCurrentIndex(ent.type-1)
+                            self.entityIDDropdown.blockSignals(False)
+            self.entitySelector.blockSignals(False)
         
+        for screenGrid in self.screenGrids:
+            screenGrid.update()
+    
+    def setEntityID(self, index):
+        index += 1
+        level, sublevel, screen = self.getLevel()
+        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
+        if selectedEntity is not None:
+            cat, i = selectedEntity
+            prev = self.j.levels[level].sublevels[sublevel].screens[screen][cat][i].type
+            if prev != index:
+                def restore(app):
+                    app.setLevel(level-1)
+                    app.setSublevel(sublevel)
+                    app.setScreen(screen)
+                    app.tabs.setCurrentWidget(self.entityTab)
+                self.undoBuffer.push(
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], "type", index),
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], "type", prev),
+                    restore,
+                    lambda app: self.updateScreenEntityList()
+                )
+                self.updateScreenEntityList()
+    
+    def updateChunkLabel(self):
+        level = self.sel_level
+        chunks = model.getLevelChunks(self.j, level)
+        chidx = self.chunkSelected.get(level, None)
+        text = ""
+        if chidx == 0 or chidx is None:
+            text = "Chunk $00 is not editable."
+        elif chidx >= len(chunks):
+            text = "(Error: OoB)"
+        else:
+            if self.j.levels[level].get("chunks", None) is None:
+                if self.j.levels[level].get("chunklink", None) is not None:
+                    chunklink = self.j.levels[level].chunklink
+                    text = f"Linked to f{rom.LEVELS[chunklink] or 'another stage'}"
+                else:
+                    text = f"(Error: chunklink)"
+            else:
+                text = f"Chunk {rom.LEVELS[level] or '?'}:{chidx:02X}"
+                uses = model.getChunkUsage(self.j, level, chidx)
+                levelsused = model.getChunkUsage(self.j, level, chidx, 1)
+                if len(uses) == 0:
+                    text += " (unused)"
+                else:
+                    text += f"\n{len(uses)} {plural(len(uses), 'appearance')}"
+                    if not (set([level]) >= set(levelsused)):
+                        text += f"\n...including appearances in other levels as a glitch chunk"
+        
+        self.chunkEditLabel.setText(text)
+        self.chunkEditLabel.update()
+    
     def setLevel(self, level):
         sender = self.sender()
         self.sel_level = level+1
@@ -767,6 +950,9 @@ class MainWindow(QMainWindow):
         
         for widget in self.screenGrids:
             widget.update()
+            
+        if self.tabs.currentWidget() == self.entityTab:
+            self.updateScreenEntityList()
         
         self.layGrid.update()
     
@@ -787,6 +973,8 @@ class MainWindow(QMainWindow):
         self.chunkSelected[self.sel_level] = chunk
         if self.chunkEdit is not None:
             self.chunkEdit.update()
+            if self.tabs.currentWidget() == self.chunkEdit.restoreTab:
+                self.updateChunkLabel()
         for screen in self.screenGrids:
             screen.update()
         for selector in self.chunkSelectors:
@@ -803,8 +991,6 @@ class MainWindow(QMainWindow):
     def onFileIO(self, target, save):
         pass
         
-
-
 app = QApplication(sys.argv)
 
 window = MainWindow()
