@@ -4,12 +4,7 @@ import rom
 from rom import readword, readbyte, readtableword
 from PIL import Image, ImageDraw
 
-PALETTE = [
-    (0xff, 0xff, 0xff),
-    (0xb0, 0xb0, 0xb0),
-    (0x30, 0x30, 0x30),
-    (0, 0, 0),
-]
+PALETTE = rom.PALETTE
 
 ENTPALETTES = [
     (0xff, 0xa0, 0x40), # misc

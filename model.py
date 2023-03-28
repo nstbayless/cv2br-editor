@@ -26,6 +26,7 @@ def loadRom(path):
     with open(path, "rb") as f:
         rom.readrom(f.read())
         j = JSONDict()
+        j.tileset_common = getTilesetAtAddr(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_COMMON)
         j.levels = []
         for i, levelname in enumerate(rom.LEVELS):
             jl = JSONDict()
@@ -36,6 +37,7 @@ def loadRom(path):
             else:
                 jl.index = i
                 jl.name = levelname
+                loadLevelTileset(j, i)
                 loadLevelChunks(j, i)
                 jl.sublevels = []
                 for sublevel in range(rom.SUBSTAGECOUNT[i]):
@@ -73,21 +75,21 @@ def loadSublevelScreenTable(j, level, sublevel):
     # remove values outside of this level's screen array
     for x in range(16):
         for y in range(16):
-            if jsl.layout[x][y] >= len(jsl.screens):
+            if jsl.layout[x][y] & 0xF >= len(jsl.screens):
                 jsl.layout[x][y] = 0
                 
 def getLevelChunks(j, level):
-    if j.levels[level].chunks is not None:
+    if j.levels[level].get("chunks", None) is not None:
         return j.levels[level].chunks
     else:
         return getLevelChunks(j, j.levels[level].chunklink)
                 
 def loadLevelChunks(j, level):
     jl = j.levels[level]
-    jl.chunks = [[0] * 16]
     if rom.LEVELS[level] == "Drac3":
         jl.chunklink = level-1
     else:
+        jl.chunks = [[0] * 16]
         chunk_start = readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
         chunk_end = rom.get_entry_end(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
         assert (chunk_end - chunk_start) % 0x10 == 0
@@ -95,11 +97,8 @@ def loadLevelChunks(j, level):
             chunk = [readbyte(rom.BANK2, chunk_start + i*0x10 + j) for j in range(0x10)]
             jl.chunks.append(chunk)
 
-def loadLevelTileset(j, level):
-    jl = j.levels[level]
-    jl.tileset = []
-    bank = rom.LEVEL_TILESET_TABLE_BANK
-    addr = readtableword(bank, rom.LEVEL_TILESET_TABLE)
+def getTilesetAtAddr(bank, addr):
+    l = []
     while readbyte(bank, addr) != 0:
         jt = JSONDict()
         jt.destaddr = ((rom.readbyte(bank, addr) << 12) + (rom.readbyte(bank, addr + 1) << 4)) & 0xffff
@@ -110,4 +109,11 @@ def loadLevelTileset(j, level):
         addr += 1
         jt.srcaddr = rom.readword(bank, addr)
         addr += 2
-        jl.tileset.append(jt)
+        l.append(jt)
+    return l
+
+def loadLevelTileset(j, level):
+    jl = j.levels[level]
+    bank = rom.LEVEL_TILESET_TABLE_BANK
+    addr = readtableword(bank, rom.LEVEL_TILESET_TABLE, level)
+    jl.tileset = getTilesetAtAddr(bank, addr)
