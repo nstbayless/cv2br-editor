@@ -103,7 +103,7 @@ def loadSublevelScreenEntities(j, level, sublevel):
                     margin = ent.get("margin-x", ent.get("margin-y", ent.get("margin")))
                     if margin is not None:
                         entmargins[(vertical, je.type)] = entmargins.get((vertical, je.type), []) + [margin]
-                    je.margin = margin
+                    je.margin = margin or (0x80 if vertical == 1 else 0xA0)
                 if cat in js and jents != js[cat]:
                     # print(f"Warning: screen {screen} appears twice in level {level}-{sublevel} with different entities")
                     # split out to new screen
@@ -123,6 +123,18 @@ def loadSublevelScreenEntities(j, level, sublevel):
             if cat not in js:
                 js[cat] = []
                 
+# screens can only appear with an edge type of 0xB/0xA/0x9 at most once
+def getScreenEdgeType(j, level, sublevel, screen):
+    jsl = j.levels[level].sublevels[sublevel]
+    rv = 0x0
+    for x in range(16):
+        for y in range(16):
+            c = jsl.layout[x][y]
+            if c & 0x0F == screen:
+                rv = c >> 4
+                if rv > 8:
+                    return rv
+    return rv
 
 def loadSublevelScreenTable(j, level, sublevel):
     jl = j.levels[level]

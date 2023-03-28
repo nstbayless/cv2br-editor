@@ -6,9 +6,9 @@ from PySide6.QtWidgets import \
     QApplication, QMainWindow, QPushButton, QLabel, \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
-    QAbstractItemView
+    QAbstractItemView, QSpinBox
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
-from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect
+from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent
 import functools
 
 def plural(i, singular, plural=None):
@@ -147,6 +147,27 @@ def paintTile(painter, vram, x, y, tileidx, scale):
     f = math.floor
     painter.drawImage(QRect(f(x), f(y), f(x2 - x + 1), f(y2 - y + 1)), img)
 
+class HotkeySpinBox(QSpinBox):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        # Install an event filter on the spin box
+        self.installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyRelease:
+            if event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
+                self.app.undo()
+
+            if event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier | Qt.ShiftModifier:
+                self.app.redo()
+                
+            if event.key() == Qt.Key_Y and event.modifiers() == Qt.ControlModifier:
+                self.app.redo()
+        
+        # Call the base class's eventFilter() method to handle the event
+        return super().eventFilter(obj, event)
+
 class ChunkWidget(QWidget):
     width=8*4
     def __init__(self, parent=None, scale=4, fixed=False):
@@ -208,6 +229,8 @@ class ChunkEdit(ChunkWidget):
             app.setChunk(chidx)
             if self.restoreTab is not None:
                 app.tabs.setCurrentWidget(self.restoreTab)
+            for w in self.entpropwidgets:
+                w.clearFocus()
         
         return restore
         
@@ -621,6 +644,7 @@ class MainWindow(QMainWindow):
         self.chunkEdit = None
         self.entityTab = None
         self.entitySelector = None
+        self.entpropwidgets = []
         self.setWindowTitle("RevEdit")
         # TODO: use pyside6-rcc to build the resources
         self.setWindowIcon(QIcon("etc/icon.png"))
@@ -709,6 +733,19 @@ class MainWindow(QMainWindow):
         self.chunkSelectors.append(SelectorPanel(self, ChunkSelectorWidget))
         hlay.addWidget(self.chunkSelectors[-1])
         vlay.addLayout(hlay)
+        
+    def addSpinBoxWithLabel(self, label, min, max):
+        hlay = QHBoxLayout()
+        l = QLabel()
+        l.setText(label)
+        l.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        hlay.addWidget(l)
+        
+        sb = HotkeySpinBox(self)
+        sb.setMinimum(min)
+        sb.setMaximum(max)
+        hlay.addWidget(sb)
+        return sb, hlay
     
     def defineEntityTab(self, tab):
         self.screenTabs.append(tab)
@@ -727,6 +764,20 @@ class MainWindow(QMainWindow):
             self.entityIDDropdown.addItem(name)
         self.entityIDDropdown.currentIndexChanged.connect(self.setEntityID)
         cvlay.addWidget(self.entityIDDropdown)
+        
+        self.entityXBox, cvhlay = self.addSpinBoxWithLabel("x: ", 0, 0x9F)
+        self.entityXBox.valueChanged.connect(functools.partial(self.setEntityProp, "x"))
+        cvlay.addLayout(cvhlay)
+        self.entityYBox, cvhlay = self.addSpinBoxWithLabel("y: ", 0, 0x7F)
+        self.entityYBox.valueChanged.connect(functools.partial(self.setEntityProp, "y"))
+        cvlay.addLayout(cvhlay)
+        self.entityMarginBox, cvhlay = self.addSpinBoxWithLabel("spawn-distance: ", 0, 0xFF)
+        self.entityMarginBox.valueChanged.connect(functools.partial(self.setEntityProp, "margin"))
+        cvlay.addLayout(cvhlay)
+        
+        self.entpropwidgets = [self.entityIDDropdown, self.entityXBox, self.entityYBox, self.entityMarginBox]
+        
+        # attributes: x, y, margin
         
         self.entitySelector = QListWidget(self)
         self.entitySelector.setMaximumWidth(240)
@@ -816,6 +867,26 @@ class MainWindow(QMainWindow):
         else:
             self.entitySelected[(level, sublevel, screen)] = None
         self.updateScreenEntityList()
+        
+    def setEntityProp(self, prop, value):
+        level, sublevel, screen = self.getLevel()
+        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
+        if self.entitySelector is not None:
+            cat, i = selectedEntity
+            prev = self.j.levels[level].sublevels[sublevel].screens[screen][cat][i][prop]
+            if prev != value:
+                def restore(app):
+                    app.setLevel(level-1)
+                    app.setSublevel(sublevel)
+                    app.setScreen(screen)
+                    app.tabs.setCurrentWidget(self.entityTab)
+                self.undoBuffer.push(
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, value),
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, prev),
+                    restore,
+                    lambda app: app.updateScreenEntityList()
+                )
+                self.updateScreenEntityList()
     
     def updateScreenEntityList(self):
         jl, jsl, js = self.getLevelJ()
@@ -824,6 +895,9 @@ class MainWindow(QMainWindow):
         if self.entitySelector is not None:
             self.entitySelector.blockSignals(True)
             self.entityIDDropdown.setEnabled(selectedEntity is not None)
+            self.entityXBox.setEnabled(selectedEntity is not None)
+            self.entityYBox.setEnabled(selectedEntity is not None)
+            self.entityMarginBox.setEnabled(selectedEntity is not None and model.getScreenEdgeType(self.j, level, sublevel, screen) != 0xB)
             selector = self.entitySelector
             self.entitySelectorWidgetIDMap = {}
             selector.clear()
@@ -835,10 +909,15 @@ class MainWindow(QMainWindow):
                     self.entitySelectorWidgetIDMap[id(item)] = (cat, i)
                     if selectedEntity == (cat, i):
                         selector.setCurrentItem(item)
-                        if self.sender() != self.entityIDDropdown:
-                            self.entityIDDropdown.blockSignals(True)
+                        if self.sender() not in self.entpropwidgets:
+                            for w in self.entpropwidgets:
+                                w.blockSignals(True)
                             self.entityIDDropdown.setCurrentIndex(ent.type-1)
-                            self.entityIDDropdown.blockSignals(False)
+                            self.entityXBox.setValue(ent.x)
+                            self.entityYBox.setValue(ent.y)
+                            self.entityMarginBox.setValue(ent.margin)
+                            for w in self.entpropwidgets:
+                                w.blockSignals(False)
             self.entitySelector.blockSignals(False)
         
         for screenGrid in self.screenGrids:
@@ -846,24 +925,7 @@ class MainWindow(QMainWindow):
     
     def setEntityID(self, index):
         index += 1
-        level, sublevel, screen = self.getLevel()
-        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
-        if selectedEntity is not None:
-            cat, i = selectedEntity
-            prev = self.j.levels[level].sublevels[sublevel].screens[screen][cat][i].type
-            if prev != index:
-                def restore(app):
-                    app.setLevel(level-1)
-                    app.setSublevel(sublevel)
-                    app.setScreen(screen)
-                    app.tabs.setCurrentWidget(self.entityTab)
-                self.undoBuffer.push(
-                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], "type", index),
-                    lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], "type", prev),
-                    restore,
-                    lambda app: self.updateScreenEntityList()
-                )
-                self.updateScreenEntityList()
+        self.setEntityProp("type", index)
     
     def updateChunkLabel(self):
         level = self.sel_level
