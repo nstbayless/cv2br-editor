@@ -8,8 +8,8 @@ from PySide6.QtWidgets import \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
     QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton, \
     QCheckBox, QFrame
-from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
-from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot
+from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence, QPolygon
+from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint
 import functools
 import copy
 
@@ -580,10 +580,14 @@ class RoomLayWidget(QWidget):
         jlayout = jsl.layout
         
         squareSize = self.getSquareSize()
+        
+        exits = []
 
         for i in range(self.gridSize):
             for j in range(self.gridSize):
                 l = jlayout[i][j]
+                for exit in model.getScreenExitDoor(self.app.j, level, sublevel, l & 0x0F):
+                    exits.append((i, j, exit))
                 text = f"{l:02X}"
                 x = i * squareSize
                 y = j * squareSize
@@ -638,6 +642,18 @@ class RoomLayWidget(QWidget):
                 if not bg:
                     painter.setPen(Qt.black)
                     painter.drawText(x + squareSize/2 - 6, y + squareSize/2 + 4, text)
+        
+        for i, j, dir in exits:
+            x = squareSize * ((i + 1) if dir == 1 else i)
+            x -= 0.1 * dir * squareSize
+            y = squareSize * j
+            triangle = QPolygon([QPoint(x, y), QPoint(x, y+squareSize), QPoint(x+squareSize*0.9*dir, y+squareSize/2)])
+            painter.setPen(Qt.NoPen)
+            if i == 0 and dir == -1 or i == 15 and dir == 1 or jlayout[i+dir][j] > 0:
+                painter.setBrush(QColor(0xB0, 0x40, 0x40, 0xC0))
+            else:
+                painter.setBrush(QColor(0x40, 0x40, 0xA0, 0xC0))
+            painter.drawPolygon(triangle)
 
 
 class MainWindow(QMainWindow):
@@ -788,9 +804,6 @@ class MainWindow(QMainWindow):
         l = QLabel("Screen Properties:")
         l.setMaximumHeight(TOP_MARGIN)
         cvlay.addWidget(l)
-        self.screenLabel = QLabel()
-        self.screenLabel.setMaximumHeight(TOP_MARGIN)
-        cvlay.addWidget(self.screenLabel)
         
         self.screenIDSelector = QComboBox()
         self.screenIDSelector.currentIndexChanged.connect(self.setScreenID)
@@ -800,6 +813,10 @@ class MainWindow(QMainWindow):
             self.setLayoutScreen(0xF0, [0x80, 0xB0, 0xA0, 0x90][id])
         self.layoutScreenScrollButtonGroup, self.layoutScreenScrollButtons, cvlay = \
             self.addRadioButtons(*SCREENSCROLLNAMES_H, layout = lambda: cvlay, cb=on_button_clicked)
+            
+        self.screenLabel = QLabel()
+        self.screenLabel.setMaximumHeight(TOP_MARGIN*3)
+        cvlay.addWidget(self.screenLabel)
         
         cvlay.addWidget(QWidget()) # padding
         hlay.addWidget(cvlayw)
@@ -1012,7 +1029,7 @@ class MainWindow(QMainWindow):
             self.setLayoutScreen(0xFF, 0)
         else:
             id -= 1
-            self.setLayoutScreen(0x0F, id)
+            self.setLayoutScreen(0x8F, id | 0x80)
     
     def setEntityProp(self, prop, value):
         level, sublevel, screen = self.getLevel()
@@ -1227,6 +1244,19 @@ class MainWindow(QMainWindow):
                 self.screenIDSelector.setCurrentIndex(0)
             else:
                 self.screenIDSelector.setCurrentIndex(s + 1)
+                exits = model.getScreenExitDoor(self.j, level, sublevel, s)
+                if -1 in exits and 1 in exits:
+                    text += "\nDoors exit to left and right."
+                elif -1 in exits:
+                    text += "\nExits sublevel to left."
+                elif 1 in exits:
+                    text += "\nExits sublevel to right."
+                for exit in exits:
+                    if x + exit in range(0x10):
+                        if jsl.layout[x+exit][y] != 0:
+                            text += "\nExit blocked -- glitches."
+                    else:
+                        text += "\nOut of bounds!"
         else:
             self.screenIDSelector.setEnabled(False)
         for button, name in zip(self.layoutScreenScrollButtons, SCREENSCROLLNAMES_V if jsl.vertical == 1 else SCREENSCROLLNAMES_H):

@@ -105,7 +105,8 @@ def loadSublevelScreenEntities(j, level, sublevel):
                         entmargins[(vertical, je.type)] = entmargins.get((vertical, je.type), []) + [margin]
                     je.margin = margin or (0x80 if vertical == 1 else 0xA0)
                 if cat in js and jents != js[cat]:
-                    # print(f"Warning: screen {screen} appears twice in level {level}-{sublevel} with different entities")
+                    # Mystery: why does 3-4 split off..?
+                    #print(f"screen {screen:X} appears twice in level {level}-{sublevel+1} with different entities (second appearance at {x:X},{y:X})")
                     # split out to new screen
                     js = copy.deepcopy(js)
                     screen = len(jsl.screens)
@@ -147,6 +148,15 @@ def loadSublevelScreenTable(j, level, sublevel):
             if jsl.layout[x][y] & 0xF >= len(jsl.screens):
                 jsl.layout[x][y] = 0
                 
+def getLevelChunksAndGlitchChunks(j, level):
+    if j.levels[level].get("chunks", None) is not None:
+        chunks = j.levels[level].chunks
+        if len(chunks) < 0x100 and rom.LEVELS[level+1] != "Drac3":
+            chunks += getLevelChunksAndGlitchChunks(j, level+1)
+        return chunks
+    else:
+        return getLevelChunksAndGlitchChunks(j, j.levels[level].chunklink)
+            
 def getLevelChunks(j, level):
     if j.levels[level].get("chunks", None) is not None:
         return j.levels[level].chunks
@@ -217,3 +227,23 @@ def addEmptyScreens(j):
                     for cat in CATS:
                         js[cat] = []
                     jsl.screens.append(js)
+
+# returns subset of {-1, 1}
+def getScreenExitDoor(j, level, sublevel, screen):
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    screen = jsl.screens[screen]
+    chunks = getLevelChunksAndGlitchChunks(j, level)
+    exits = set()
+    DOORTILES = [0x17,0x18,0x19,0x1A]
+    for dir, x in [(-1, 0), (1, 4)]:
+        for y in range(4):
+            chidx = screen.data[y][x]
+            if chidx < len(chunks):
+                chunk = chunks[chidx]
+                for i in range(4):
+                    for j in range(4):
+                        if chunk[i+j*4] in DOORTILES:
+                            exits.add(dir)
+                            break # ideally, break to outermost loop.
+    return exits
