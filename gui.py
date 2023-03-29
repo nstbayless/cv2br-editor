@@ -229,8 +229,6 @@ class ChunkEdit(ChunkWidget):
             app.setChunk(chidx)
             if self.restoreTab is not None:
                 app.tabs.setCurrentWidget(self.restoreTab)
-            for w in self.entpropwidgets:
-                w.clearFocus()
         
         return restore
         
@@ -906,7 +904,7 @@ class MainWindow(QMainWindow):
                 self.undoBuffer.push(
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, value),
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, prev),
-                    lambda app: app.restoreEntityContext(),
+                    lambda app: app.restoreEntityContext(level, sublevel, screen),
                     lambda app: app.updateScreenEntityList()
                 )
                 self.updateScreenEntityList()
