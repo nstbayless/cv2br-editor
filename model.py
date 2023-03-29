@@ -1,6 +1,8 @@
 import rom
 from rom import readword, readtablebyte, readtableword, readbyte
 import copy
+import traceback
+
 class JSONDict(dict):
     # This class implemented by ChatGPT
     # WARNING! some attributes are overshadowed by native dict attributes
@@ -20,8 +22,8 @@ class JSONDict(dict):
             setattr(dict, attr, value)
         else:
             self[attr] = value
-    
-# returns a pair: nes: bytes, data: JSONDict
+
+# returns a pair: gb: bytes, data: JSONDict
 def loadRom(path):
     with open(path, "rb") as f:
         rom.readrom(f.read())
@@ -46,10 +48,7 @@ def loadRom(path):
                     loadSublevelScreens(j, i, sublevel)
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
-        return rom.data, j
-
-def saveRom(base, path):
-    pass
+        return rom.data, j        
 
 def loadSublevelScreens(j, level, sublevel):
     tiles_start_addr = readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, level, sublevel)
@@ -152,8 +151,8 @@ def getLevelChunksAndGlitchChunks(j, level):
     if j.levels[level].get("chunks", None) is not None:
         chunks = j.levels[level].chunks
         if len(chunks) < 0x100 and rom.LEVELS[level+1] != "Drac3":
-            chunks += getLevelChunksAndGlitchChunks(j, level+1)
-        return chunks
+            return chunks + getLevelChunksAndGlitchChunks(j, level+1)
+        return chunks + []
     else:
         return getLevelChunksAndGlitchChunks(j, j.levels[level].chunklink)
             
@@ -232,13 +231,13 @@ def addEmptyScreens(j):
 def getScreenExitDoor(j, level, sublevel, screen):
     jl = j.levels[level]
     jsl = jl.sublevels[sublevel]
-    screen = jsl.screens[screen]
+    js = jsl.screens[screen]
     chunks = getLevelChunksAndGlitchChunks(j, level)
     exits = set()
     DOORTILES = [0x17,0x18,0x19,0x1A]
     for dir, x in [(-1, 0), (1, 4)]:
         for y in range(4):
-            chidx = screen.data[y][x]
+            chidx = js.data[y][x]
             if chidx < len(chunks):
                 chunk = chunks[chidx]
                 for i in range(4):
@@ -247,3 +246,175 @@ def getScreenExitDoor(j, level, sublevel, screen):
                             exits.add(dir)
                             break # ideally, break to outermost loop.
     return exits
+
+# gets list of 'exits' from this screen (via ropes)
+# returns subset of {(-1, 0), (1, 0), (0, -1), (0, 1)}
+def getScreenPortals(j, level, sublevel, screen):
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    js = jsl.screens[screen]
+    chunks = getLevelChunksAndGlitchChunks(j, level)
+    ROPES = [0x1B, 0xF0, 0x28]
+    portals = set()
+    for x in range(5):
+        for ydir, y in [(-1, 0), (1, 3)]:
+            chidx = js.data[y][x]
+            if chidx < len(chunks):
+                chunk = chunks[chidx]
+                for i in range(4):
+                    j = y
+                    if chunk[i+j*4] in ROPES:
+                        portals.add((0, ydir))
+                        break # ideally, break to outermost loop.
+    return portals
+
+def screenUsed(j, level, sublevel, screen):
+    jsl = j.levels[level].sublevels[sublevel]
+    for x in range(16):
+        for y in range(16):
+            if jsl.layout[x][y] & 0xF == screen:
+                return True
+    return False
+    
+# is there a way to enter this screen through a portal or door?
+def getScreenEnterable(j, level, sublevel, x, y):
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    if (x, y) == (jsl.startx, jsl.starty):
+        return True
+    if jsl.layout[x][y] == 0:
+        return False
+    for xoff, yoff in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+        if x + xoff in range(16):
+            neighbour = jsl.layout[x+xoff][(y+yoff + 16) % 16]
+            if neighbour > 0:
+                t = neighbour >> 4
+                
+                # don't count continuous scrolling
+                if jsl.vertical == 1 and yoff > 0 and t in [0x8, 0x9]:
+                    continue
+                
+                if jsl.vertical == 1 and yoff < 0 and t in [0x8, 0xA]:
+                    continue
+                
+                if jsl.vertical == 0 and xoff > 0 and t in [0x8, 0x9]:
+                    continue
+                
+                if jsl.vertical == 0 and xoff < 0 and t in [0x8, 0xA]:
+                    continue
+                
+                if (-xoff, -yoff) in getScreenPortals(j, level, sublevel, neighbour & 0x0F):
+                    return True
+    return False
+
+def getEnterabilityLayout(j, level, sublevel):
+    return [[getScreenEnterable(j, level, sublevel, x, y) for y in range(16)] for x in range(16)]
+
+# ------------------------------------------------------
+
+class SaveContext:
+    def __init__(self, gb, j):
+        self.gb = copy.copy(gb)
+        self.j = j
+        self.errors = []
+        self.regions = JSONDict({
+            "ScreenTilesTable": {
+                "shortname": "STT",
+                "max": 0x4316 - 0x42C4,
+                "addr": rom.LEVTAB_TILES_BANK2,
+                "bank": rom.BANK2,
+            }
+        })
+        self.regionc = JSONDict()
+        for key in self.regions.keys():
+            self.regions[key] = JSONDict(self.regions[key])
+            self.regions[key].key = key
+            self.regionc[key] = 0
+    
+    def romaddr(bank, addr):
+        if addr < 0x4000 and bank != 0:
+            raise Exception(f"Address out of bounds for bank {bank}")
+        return bank * 0x4000 + addr % 0x4000
+    
+    def writeByte(self, bank, addr, v):
+        if type(v) != int or v < 0 or v >= 0x100:
+            raise Exception(f"Error with value {v}")
+        self.gb[self.romaddr(bank, addr)] = v
+    
+    def writeWord(self, bank, addr, v, littleEndian=True):
+        if littleEndian:
+            self.writeByte(bank, addr, v & 0xff)
+            self.writeByte(bank, addr+1, v >> 8)
+        else:
+            self.writeByte(bank, addr, v >> 8)
+            self.writeByte(bank, addr+1, v & 0xff)
+        
+# returns:
+#  - a list of (regionname, size, maxsize)
+#  - a list of errors, or empty if successful
+def saveRom(gb, j, path=None):
+    assert(len(gb) > 0 and len(gb) % 0x4000 == 0)
+    regions, errors = _saveRom(SaveContext(gb, j))
+    if path is not None:
+        try:
+            with open(path, "wb") as f:
+                f.write(gb)
+        except IOError as e:
+            errors += [f"I/O Error writing to file {path}: {e}"]
+        except OSError as e:
+            errors += [f"OS Error writing to file {path}: {e}"]
+    return regions, errors
+    
+def _saveRom(cxt: SaveContext):
+    try:
+        writeRom(cxt)
+        
+        for key in cxt.regions.keys():
+            c = cxt.regionc[key]
+            m = cxt.regions[key]["max"]
+            if c > m:
+                cxt.errors.append(f"Region \"{key}\" exceeded ({c:04X} > {m:04X} bytes)")
+                
+        return [(key, cxt.regionc[key], cxt.regions[key]["max"]) for key in cxt.regions.keys()], cxt.errors
+    except Exception as e:
+        errors = [f"Fatal: {e}\n{traceback.format_exec()}"]
+        regions = [(key, None, cxt.regions[key]["max"]) for key in cxt.regions.keys()]
+        return regions, errors
+    
+def writeRom(cxt: SaveContext):
+    # TODO: tileset_common (* no gui support)
+    # TODO: level.tileset  (* no gui support)
+    constructScreenRemapping(cxt)
+    writeTilesetTable(cxt)
+    
+def constructScreenRemapping(cxt: SaveContext):
+    cxt.screenRemapping = dict()
+    cxt.screenEnterable = dict()
+    cxt.screenUsed = dict()
+    for i, jl in enumerate(cxt.j.levels):
+        if i > 0:
+            cxt.screenRemapping[i] = dict()
+            cxt.screenEnterable[i] = dict()
+            cxt.screenUsed[i] = dict()
+            for sublevel, jsl in enumerate(jl.sublevels):
+                cxt.screenRemapping[i][sublevel] = dict()
+                cxt.screenEnterable[i][sublevel] = dict()
+                cxt.screenUsed[i][sublevel] = dict()
+                constructScreenRemappingForSublevel(cxt, i, sublevel)
+
+def constructScreenRemappingForSublevel(cxt: SaveContext, level: int, sublevel: int):
+    jsl = cxt.j.levels[level].sublevels[sublevel]
+    screenMap = cxt.screenRemapping[level][sublevel]
+    used = [screenUsed(level, sublevel, screen) for screen in range(0x10)]
+    
+    
+    # screenMap: editor index -> out index
+    # - skip unused screens
+    # - ensure enterable screens come first
+    # - deduplicate screens if possible
+
+def writeTilesetTable(cxt: SaveContext):
+    bank = cxt.ScreenTilesTable.bank
+    addr = cxt.ScreenTilesTable.addr
+    
+    

@@ -98,8 +98,9 @@ with open("leveldata.asm", "w") as f:
         if level is not None:
             write("")
             addr = readword(rom.BANK2, rom.LEVTAB_TILES_BANK2 + i*2)
-            write(f"org ${addr:04X}")
-            write(f"banksk{rom.BANK2:X}")
+            #write(f"org ${addr:04X}")
+            #write(f"banksk{rom.BANK2:X}")
+            write(f"; addr={rom.BANK2:X}:{addr:04X}")
             write(f"{level}_Tiles:")
             for substage in range(rom.SUBSTAGECOUNT[i]):
                 addr2 = readword(rom.BANK2, addr + substage*2)

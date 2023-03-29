@@ -193,6 +193,14 @@ class ChunkWidget(QWidget):
             self.setFixedWidth(scale * 8 * 4)
             self.setFixedHeight(scale * 8 * 4)
         self.id = 0
+        
+    def getChunk(self):
+        level, sublevel, screen = self.app.getLevel()
+        chunks = model.getLevelChunks(self.app.j, level)
+        if self.id is None or self.id >= len(chunks):
+            return None
+        else:
+            return chunks[self.id]
     
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -230,6 +238,7 @@ class ChunkEdit(ChunkWidget):
             self.hoverPos = None
         if prevHoverPos != self.hoverPos:
             self.update()
+            self.app.updateChunkLabel()
         
     def leaveEvent(self, event):
         self.hoverPos = None
@@ -582,6 +591,7 @@ class RoomLayWidget(QWidget):
         squareSize = self.getSquareSize()
         
         exits = []
+        enterable = model.getEnterabilityLayout(self.app.j, level, sublevel)
 
         for i in range(self.gridSize):
             for j in range(self.gridSize):
@@ -631,13 +641,19 @@ class RoomLayWidget(QWidget):
                     if (l & 0x10):
                         painter.drawLine(x2, y, x2, y2)
                 
+                painter.setPen(Qt.NoPen)
+                
+                if enterable[i][j]:
+                    h = 5
+                    painter.fillRect(x, y, x2-x, h, QColor(100, 0xc0, 100, 0x80))
+                
                 if i == startx and j == starty:
                     painter.setBrush(QColor(100, 0xc0, 100))
                     if jlayout[i][j] & 0xF0 not in [0xB0, 0xA0, 0x90]:
                         painter.setBrush(QColor(0xC0, 90, 90))
-                    painter.setPen(Qt.NoPen)
                     margin=4
                     painter.drawEllipse(x + margin, y+ margin, squareSize-2*margin, squareSize-2*margin)
+                    
                 
                 if not bg:
                     painter.setPen(Qt.black)
@@ -682,9 +698,14 @@ class MainWindow(QMainWindow):
         self.entityTab = None
         self.entitySelector = None
         self.entpropwidgets = []
-        self.setWindowTitle("RevEdit")
+        
         # TODO: use pyside6-rcc to build the resources
         self.setWindowIcon(QIcon("etc/icon.png"))
+        self.catIcons = {}
+        for cat in CATS:
+            self.catIcons[cat] = QIcon(f"etc/ent{cat}.png")
+        
+        self.setWindowTitle("RevEdit")    
         self.defineActions()
         self.defineMenus()
         self.defineTabs()
@@ -714,6 +735,10 @@ class MainWindow(QMainWindow):
         self.actSaveAs.triggered.connect(functools.partial(self.onFileIO, "hack", 2))
         self.actSaveAs.setShortcut(QKeySequence("ctrl+shift+s"))
         
+        self.actExport = QAction("&Export ROM...", self)
+        self.actExport.triggered.connect(functools.partial(self.onFileIO, "nes", 2))
+        self.actExport.setShortcut(QKeySequence("ctrl+e"))
+        
         self.actUndo = QAction("&Undo", self)
         self.actUndo.triggered.connect(self.undo)
         self.actUndo.setShortcut(QKeySequence("Ctrl+z"))
@@ -733,6 +758,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.actLoad)
         file_menu.addAction(self.actSave)
         file_menu.addAction(self.actSaveAs)
+        file_menu.addSeparator()
+        file_menu.addAction(self.actExport)
         
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(self.actUndo)
@@ -764,6 +791,7 @@ class MainWindow(QMainWindow):
         hlay.addWidget(self.layGrid)
         
         TOP_MARGIN = 20
+        PROPW = 160
         
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
@@ -774,7 +802,7 @@ class MainWindow(QMainWindow):
         cvlayw = QWidget()
         cvlay = QVBoxLayout()
         cvlayw.setLayout(cvlay)
-        cvlayw.setMaximumWidth(150)
+        cvlayw.setMaximumWidth(PROPW)
         l = QLabel("Sublevel Properties:")
         l.setMaximumHeight(TOP_MARGIN)
         cvlay.addWidget(l)
@@ -800,7 +828,7 @@ class MainWindow(QMainWindow):
         cvlayw = QWidget()
         cvlay = QVBoxLayout()
         cvlayw.setLayout(cvlay)
-        cvlayw.setMaximumWidth(150)
+        cvlayw.setMaximumWidth(PROPW)
         l = QLabel("Screen Properties:")
         l.setMaximumHeight(TOP_MARGIN)
         cvlay.addWidget(l)
@@ -1136,7 +1164,7 @@ class MainWindow(QMainWindow):
             for cat in CATS:
                 for i, ent in enumerate(js.get(cat, [])):
                     name = rom.getEntityName(ent.type)
-                    item = QListWidgetItem(name)
+                    item = QListWidgetItem(self.catIcons[cat], name)
                     selector.addItem(item)
                     self.entitySelectorWidgetIDMap[id(item)] = (cat, i)
                     if selectedEntity == (cat, i):
@@ -1208,6 +1236,13 @@ class MainWindow(QMainWindow):
                     if not (set([level]) >= set(levelsused)):
                         text += f"\n...including appearances in other levels as a glitch chunk"
         
+        if self.chunkEdit.hoverPos is not None:
+            x, y = self.chunkEdit.hoverPos
+            chunk = self.chunkEdit.getChunk()
+            if chunk is not None:
+                tidx = chunk[x + y * 4]
+                text += f"\nTile ${tidx:04X}"
+        
         self.chunkEditLabel.setText(text)
         self.chunkEditLabel.update()
     
@@ -1237,13 +1272,17 @@ class MainWindow(QMainWindow):
             self.screenIDSelector.addItem(f"None")
             for i in range(min(len(jsl.screens), 0xF)):
                 sn = ""
-                if not self.screenUsed(level, sublevel, i):
+                if not model.screenUsed(self.j, level, sublevel, i):
                     sn = "* "
                 self.screenIDSelector.addItem(f"{sn}Screen ${i:X}")
             if t == 0 and s == 0:
                 self.screenIDSelector.setCurrentIndex(0)
             else:
                 self.screenIDSelector.setCurrentIndex(s + 1)
+                if (x, y) == (jsl.startx, jsl.starty):
+                    text += "\nSublevel entrance."
+                elif model.getScreenEnterable(self.j, level, sublevel, x, y):
+                    text += "\nScreen is enterable."
                 exits = model.getScreenExitDoor(self.j, level, sublevel, s)
                 if -1 in exits and 1 in exits:
                     text += "\nDoors exit to left and right."
@@ -1254,9 +1293,9 @@ class MainWindow(QMainWindow):
                 for exit in exits:
                     if x + exit in range(0x10):
                         if jsl.layout[x+exit][y] != 0:
-                            text += "\nExit blocked -- glitches."
+                            text += "\nExit blocked—glitches!"
                     else:
-                        text += "\nOut of bounds!"
+                        text += "\nExit out of bounds!"
         else:
             self.screenIDSelector.setEnabled(False)
         for button, name in zip(self.layoutScreenScrollButtons, SCREENSCROLLNAMES_V if jsl.vertical == 1 else SCREENSCROLLNAMES_H):
@@ -1312,14 +1351,6 @@ class MainWindow(QMainWindow):
     def redo(self):
         self.undoBuffer.redo()
         
-    def screenUsed(self, level, sublevel, screen):
-        jsl = self.j.levels[level].sublevels[sublevel]
-        for x in range(16):
-            for y in range(16):
-                if jsl.layout[x][y] & 0xF == screen:
-                    return True
-        return False
-        
     def setScreen(self, screen, sublevelChanged=False):
         sender = self.sender()
         level, sublevel, _ = self.getLevel()
@@ -1327,7 +1358,7 @@ class MainWindow(QMainWindow):
         # TODO: if there is only 1 copy of the screen, set screencoords to its coords
         self.sel_screencoords[(level, sublevel)] = None
         self.sel_screen[(level, sublevel)] = screen
-        screens = [f"{'* ' if not self.screenUsed(level, sublevel, i) else ''}Screen ${i:X}" for i, sc in enumerate(self.j.levels[level].sublevels[sublevel].screens)]
+        screens = [f"{'* ' if not model.screenUsed(self.j, level, sublevel, i) else ''}Screen ${i:X}" for i, sc in enumerate(self.j.levels[level].sublevels[sublevel].screens)]
         for qcb in self.qcb_screens:
             if qcb != sender:
                 qcb.blockSignals(True)
