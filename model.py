@@ -68,6 +68,7 @@ def loadSublevelScreens(j, level, sublevel):
                 js.data[y].append(readbyte(rom.BANK6, tiles_start_addr + i * 20 + y * 5 + x))
         jsl.screens.append(js)
         
+CATS = ["misc", "enemies", "items"]
 entmargins = dict()
 
 def getStandardMarginForEntity(id, vertical=0):
@@ -83,7 +84,6 @@ def loadSublevelScreenEntities(j, level, sublevel):
     jsl = jl.sublevels[sublevel]
     startx, starty, vertical, layout = rom.produce_sublevel_screen_arrangement(level, sublevel)
     entstable = rom.get_entities_in_screens(level, sublevel)
-    CATS = ["misc", "enemies", "items"]
     for x in range(16):
         for y in range(16):
             if layout[x][y] == 0:
@@ -206,3 +206,14 @@ def getChunkUsage(j, clevel, chidx, infodepth=4):
                             if js.data[y][x] == chidx + compoffset:
                                 uses += tuple([level, sublevel, screen, (y, x)][:infodepth])
     return uses
+
+def addEmptyScreens(j):
+    for jl in j.levels:
+        if jl is not None and "sublevels" in jl:
+            for jsl in jl.sublevels:
+                for i in range(0x10 - len(jsl.screens)):
+                    js = JSONDict()
+                    js.data = [[0 for a in range(5)] for b in range(4)]
+                    for cat in CATS:
+                        js[cat] = []
+                    jsl.screens.append(js)

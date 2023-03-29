@@ -34,8 +34,8 @@ SCREENSCROLLS = {
     "Left": 0xA,
     "Right": 0x9
 }
-SCREENSCROLLNAMES_H = ["Empty", "Free Scrolling", "Enclosed", "Left", "Right"]
-SCREENSCROLLNAMES_V = ["Empty", "Free Scrolling", "Enclosed", "Top", "Bottom"]
+SCREENSCROLLNAMES_H = ["Free Scrolling", "Enclosed", "Left", "Right"]
+SCREENSCROLLNAMES_V = ["Free Scrolling", "Enclosed", "Top", "Bottom"]
 
 # Undoable Action
 class UAction:
@@ -644,6 +644,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         self.nes, self.j = model.loadRom("base-us.gb")
+        model.addEmptyScreens(self.j)
         self.undoBuffer = UndoBuffer(self)
         self.vram = VRam(self.j, self.nes)
         self.sel_level = 1 # plant=1 index
@@ -791,15 +792,19 @@ class MainWindow(QMainWindow):
         self.screenLabel.setMaximumHeight(TOP_MARGIN)
         cvlay.addWidget(self.screenLabel)
         
+        self.screenIDSelector = QComboBox()
+        self.screenIDSelector.currentIndexChanged.connect(self.setScreenID)
+        cvlay.addWidget(self.screenIDSelector)
+        
         def on_button_clicked(id):
-            pass
+            self.setLayoutScreen(0xF0, [0x80, 0xB0, 0xA0, 0x90][id])
         self.layoutScreenScrollButtonGroup, self.layoutScreenScrollButtons, cvlay = \
-            self.addRadioButtons("Empty", "Free Scrolling", "Enclosed", "Start", "End", layout = lambda: cvlay)
+            self.addRadioButtons(*SCREENSCROLLNAMES_H, layout = lambda: cvlay, cb=on_button_clicked)
         
         cvlay.addWidget(QWidget()) # padding
         hlay.addWidget(cvlayw)
         
-        self.layWidgets = [self.sublevelVerticalScrollingCheckbox, self.sublevelStartXBox, self.sublevelStartYBox]
+        self.layWidgets = [self.sublevelVerticalScrollingCheckbox, self.screenIDSelector, self.sublevelStartXBox, self.sublevelStartYBox, self.layoutScreenScrollButtonGroup, *self.layoutScreenScrollButtons]
         
         vlay.addLayout(hlay)
     
@@ -985,6 +990,29 @@ class MainWindow(QMainWindow):
         app.setSublevel(sublevel)
         app.setScreen(screen)
         app.tabs.setCurrentWidget(app.entityTab)
+        
+    def setLayoutScreen(self, mask, value):
+        jl, jsl, js = self.getLevelJ()
+        level, sublevel, screen = self.getLevel()
+        selCoords = self.sel_screencoords.get((level, sublevel), None)
+        if selCoords is not None:
+            x, y = selCoords
+            prev = jsl.layout[x][y]
+            newvalue = (prev & ~mask) | (value & mask)
+            if newvalue != prev:
+                self.undoBuffer.push(
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].layout[x], y, newvalue),
+                    lambda app: lset(app.j.levels[level].sublevels[sublevel].layout[x], y, prev),
+                    lambda app: app.restoreLayoutContext(level, sublevel),
+                    lambda app: app.updateLay()
+                )
+        
+    def setScreenID(self, id):
+        if id == 0:
+            self.setLayoutScreen(0xFF, 0)
+        else:
+            id -= 1
+            self.setLayoutScreen(0x0F, id)
     
     def setEntityProp(self, prop, value):
         level, sublevel, screen = self.getLevel()
@@ -1185,12 +1213,26 @@ class MainWindow(QMainWindow):
         if selCoords is not None:
             x, y = selCoords
             s = jsl.layout[x][y] & 0xF
-            text = f"Screen {s:X} at ({x:X}, {y:X})"
+            text = f"Screen at ({x:X}, {y:X})"
             t = jsl.layout[x][y] >> 4
+            self.screenIDSelector.setEnabled(True)
+            self.screenIDSelector.clear()
+            self.screenIDSelector.addItem(f"None")
+            for i in range(min(len(jsl.screens), 0xF)):
+                sn = ""
+                if not self.screenUsed(level, sublevel, i):
+                    sn = "* "
+                self.screenIDSelector.addItem(f"{sn}Screen ${i:X}")
+            if t == 0 and s == 0:
+                self.screenIDSelector.setCurrentIndex(0)
+            else:
+                self.screenIDSelector.setCurrentIndex(s + 1)
+        else:
+            self.screenIDSelector.setEnabled(False)
         for button, name in zip(self.layoutScreenScrollButtons, SCREENSCROLLNAMES_V if jsl.vertical == 1 else SCREENSCROLLNAMES_H):
-            button.setEnabled(selCoords is not None)
+            button.setEnabled(selCoords is not None and t != 0)
             button.setText(name)
-            if selCoords is None:
+            if selCoords is None or SCREENSCROLLS[name] != t or t == 0:
                 button.setChecked(False)
             elif SCREENSCROLLS[name] == t:
                 button.setChecked(True)
@@ -1240,14 +1282,22 @@ class MainWindow(QMainWindow):
     def redo(self):
         self.undoBuffer.redo()
         
+    def screenUsed(self, level, sublevel, screen):
+        jsl = self.j.levels[level].sublevels[sublevel]
+        for x in range(16):
+            for y in range(16):
+                if jsl.layout[x][y] & 0xF == screen:
+                    return True
+        return False
+        
     def setScreen(self, screen, sublevelChanged=False):
         sender = self.sender()
+        level, sublevel, _ = self.getLevel()
         
         # TODO: if there is only 1 copy of the screen, set screencoords to its coords
-        self.sel_screencoords[(self.sel_level, self.sel_sublevel[self.sel_level])] = None
-        
-        self.sel_screen[(self.sel_level, self.sel_sublevel[self.sel_level])] = screen
-        screens = [f"Screen ${i:02X}" for i, sc in enumerate(self.j.levels[self.sel_level].sublevels[self.sel_sublevel[self.sel_level]].screens)]
+        self.sel_screencoords[(level, sublevel)] = None
+        self.sel_screen[(level, sublevel)] = screen
+        screens = [f"{'* ' if not self.screenUsed(level, sublevel, i) else ''}Screen ${i:X}" for i, sc in enumerate(self.j.levels[level].sublevels[sublevel].screens)]
         for qcb in self.qcb_screens:
             if qcb != sender:
                 qcb.blockSignals(True)
