@@ -6,7 +6,8 @@ from PySide6.QtWidgets import \
     QApplication, QMainWindow, QPushButton, QLabel, \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
-    QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton
+    QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton, \
+    QCheckBox, QFrame
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
 from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot
 import functools
@@ -22,6 +23,19 @@ def lset(l, i, v):
     l[i] = v
     
 CATS = ["misc", "enemies", "items"]
+SCREENSCROLLS = {
+    "Empty": 0x0,
+    "Free Scrolling": 0x8, 
+    "Enclosed": 0xB,
+    "Start": 0xA,
+    "End": 0x9,
+    "Top": 0xA,
+    "Bottom": 0x9,
+    "Left": 0xA,
+    "Right": 0x9
+}
+SCREENSCROLLNAMES_H = ["Empty", "Free Scrolling", "Enclosed", "Left", "Right"]
+SCREENSCROLLNAMES_V = ["Empty", "Free Scrolling", "Enclosed", "Top", "Bottom"]
 
 # Undoable Action
 class UAction:
@@ -540,6 +554,8 @@ class RoomLayWidget(QWidget):
             if jsl.layout[x][y] > 0:
                 screen = jsl.layout[x][y] & 0x0f
                 self.app.setScreen(screen)
+            
+            self.app.setScreenCoords(x, y)
 
     def getSquareSize(self):
         return min(self.width(), self.height()) // self.gridSize
@@ -556,6 +572,7 @@ class RoomLayWidget(QWidget):
 
         font = QFont(['Helvetica', 'Arial'], 8)
         level, sublevel, screen = self.app.getLevel()
+        screenCoords = self.app.sel_screencoords.get((level, sublevel), None)
         jsl = self.app.j.levels[level].sublevels[sublevel]
         startx = jsl.startx
         starty = jsl.starty
@@ -573,17 +590,11 @@ class RoomLayWidget(QWidget):
                 x2 = x + squareSize
                 y2 = y + squareSize
                 bg = False
-                if i == startx and j == starty:
-                    if l & 0x0f == screen:
-                        painter.setBrush(QColor(0xff, 200, 0xff))
+                if l == 0:
+                    if (i, j) == screenCoords:
+                        painter.setBrush(QColor(100, 100, 180, 200))
                     else:
-                        painter.setBrush(QColor(0xff, 220, 220))
-                    painter.setPen(Qt.NoPen)
-                    painter.drawRect(x, y, squareSize, squareSize)
-                    painter.setBrush(Qt.NoBrush)
-                    painter.setPen(pen)
-                elif l == 0:
-                    painter.setBrush(QColor(0, 0, 0, 50))
+                        painter.setBrush(QColor(0, 0, 0, 50))
                     painter.setPen(Qt.NoPen)
                     painter.drawRect(x, y, squareSize, squareSize)
                     painter.setBrush(Qt.NoBrush)
@@ -591,7 +602,7 @@ class RoomLayWidget(QWidget):
                     bg = True
                 else:
                     painter.setPen(Qt.NoPen)
-                    if l & 0x0f == screen:
+                    if (i, j) == screenCoords:
                         painter.setBrush(QColor(0x40, 0x40, 0xff, 50))
                     else:
                         painter.setBrush(Qt.white)
@@ -616,7 +627,16 @@ class RoomLayWidget(QWidget):
                     if (l & 0x10):
                         painter.drawLine(x2, y, x2, y2)
                 
+                if i == startx and j == starty:
+                    painter.setBrush(QColor(100, 0xc0, 100))
+                    if jlayout[i][j] & 0xF0 not in [0xB0, 0xA0, 0x90]:
+                        painter.setBrush(QColor(0xC0, 90, 90))
+                    painter.setPen(Qt.NoPen)
+                    margin=4
+                    painter.drawEllipse(x + margin, y+ margin, squareSize-2*margin, squareSize-2*margin)
+                
                 if not bg:
+                    painter.setPen(Qt.black)
                     painter.drawText(x + squareSize/2 - 6, y + squareSize/2 + 4, text)
 
 
@@ -629,6 +649,7 @@ class MainWindow(QMainWindow):
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
         self.sel_screen = {}
+        self.sel_screencoords = {}
         self.qcb_levels = []
         self.qcb_sublevels = []
         self.qcb_screens = []
@@ -654,7 +675,7 @@ class MainWindow(QMainWindow):
         self.setLevel(3)
     
     def getLevel(self):
-        return self.sel_level, self.sel_sublevel[self.sel_level], self.sel_screen[(self.sel_level, self.sel_sublevel[self.sel_level])]
+        return self.sel_level, self.sel_sublevel.get(self.sel_level, 0), self.sel_screen.get((self.sel_level, self.sel_sublevel[self.sel_level]), 0)
     
     def getLevelJ(self):
         level, sublevel, screen = self.getLevel()
@@ -719,9 +740,68 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(tab, label)
     
     def defineLevelLayTab(self, tab):
+        self.layTab = tab
         vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 1)
+        hlay = QHBoxLayout()
         self.layGrid = RoomLayWidget(self)
-        vlay.addWidget(self.layGrid)
+        hlay.addWidget(self.layGrid)
+        
+        TOP_MARGIN = 20
+        
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        hlay.addWidget(separator)
+        
+        # Sublevel Properties
+        cvlayw = QWidget()
+        cvlay = QVBoxLayout()
+        cvlayw.setLayout(cvlay)
+        cvlayw.setMaximumWidth(150)
+        l = QLabel("Sublevel Properties:")
+        l.setMaximumHeight(TOP_MARGIN)
+        cvlay.addWidget(l)
+        self.sublevelVerticalScrollingCheckbox = QCheckBox("Vertical")
+        self.sublevelVerticalScrollingCheckbox.stateChanged.connect(self.setSublevelVertical)
+        cvlay.addWidget(self.sublevelVerticalScrollingCheckbox)
+        
+        self.sublevelStartXBox, chlay = self.addSpinBoxWithLabel("Start X", 0, 15)
+        self.sublevelStartXBox.valueChanged.connect(functools.partial(self.setSublevelProp, "startx"))
+        cvlay.addLayout(chlay)
+        self.sublevelStartYBox, chlay = self.addSpinBoxWithLabel("Start Y", 0, 15)
+        self.sublevelStartYBox.valueChanged.connect(functools.partial(self.setSublevelProp, "starty"))
+        cvlay.addLayout(chlay)
+        cvlay.addWidget(QWidget()) # padding
+        hlay.addWidget(cvlayw)
+        
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        hlay.addWidget(separator)
+        
+        # Screen Properties
+        cvlayw = QWidget()
+        cvlay = QVBoxLayout()
+        cvlayw.setLayout(cvlay)
+        cvlayw.setMaximumWidth(150)
+        l = QLabel("Screen Properties:")
+        l.setMaximumHeight(TOP_MARGIN)
+        cvlay.addWidget(l)
+        self.screenLabel = QLabel()
+        self.screenLabel.setMaximumHeight(TOP_MARGIN)
+        cvlay.addWidget(self.screenLabel)
+        
+        def on_button_clicked(id):
+            pass
+        self.layoutScreenScrollButtonGroup, self.layoutScreenScrollButtons, cvlay = \
+            self.addRadioButtons("Empty", "Free Scrolling", "Enclosed", "Start", "End", layout = lambda: cvlay)
+        
+        cvlay.addWidget(QWidget()) # padding
+        hlay.addWidget(cvlayw)
+        
+        self.layWidgets = [self.sublevelVerticalScrollingCheckbox, self.sublevelStartXBox, self.sublevelStartYBox]
+        
+        vlay.addLayout(hlay)
     
     def defineScreenTab(self, tab):
         self.screenGrids.append(ScreenTileWidget(self, tab))
@@ -734,7 +814,7 @@ class MainWindow(QMainWindow):
         vlay.addLayout(hlay)
         
     def addRadioButtons(self, *labels, **kwargs):
-        hlay = QHBoxLayout()
+        hlay = kwargs.get("layout", QHBoxLayout)()
         if "label" in kwargs:
             l = QLabel()
             l.setText(kwargs["label"])
@@ -745,6 +825,9 @@ class MainWindow(QMainWindow):
         for label in labels:
             buttons.append(QRadioButton(label))
             hlay.addWidget(buttons[-1])
+        if "cb" in kwargs:
+            for i, button in enumerate(buttons):
+                button.clicked.connect(functools.partial(kwargs["cb"], i))
         return bg, buttons, hlay
         
     def addSpinBoxWithLabel(self, label, min, max):
@@ -769,6 +852,11 @@ class MainWindow(QMainWindow):
         self.screenGrids.append(ScreenWidget(self, tab))
         hlay.addWidget(self.screenGrids[-1])
         
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        hlay.addWidget(separator)
+        
         cvlay = QVBoxLayout()
         
         self.entityIDDropdown = QComboBox()
@@ -778,11 +866,9 @@ class MainWindow(QMainWindow):
         self.entityIDDropdown.currentIndexChanged.connect(self.setEntityID)
         cvlay.addWidget(self.entityIDDropdown)
         
-        self.entityCategoryButtonGroup, self.entityCategoryButtons, cvhlay = self.addRadioButtons(*CATS)
-        for i, button in enumerate(self.entityCategoryButtons):
-            def on_button_clicked(id):
-                self.setEntityCategory(CATS[id])
-            button.clicked.connect(functools.partial(on_button_clicked, i))
+        def on_button_clicked(id):
+            self.setEntityCategory(CATS[id])
+        self.entityCategoryButtonGroup, self.entityCategoryButtons, cvhlay = self.addRadioButtons(*CATS, cb=on_button_clicked)
         cvlay.addLayout(cvhlay)
         
         self.entityXBox, cvhlay = self.addSpinBoxWithLabel("x: ", 0, 0x9F)
@@ -976,7 +1062,6 @@ class MainWindow(QMainWindow):
         )
     
     def removeEntity(self):
-        level, sublevel, screen = self.getLevel()
         jl, jsl, js = self.getLevelJ()
         level, sublevel, screen = self.getLevel()
         selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
@@ -1033,13 +1118,30 @@ class MainWindow(QMainWindow):
     def setEntityID(self, index):
         index += 1
         self.setEntityProp("type", index)
+        
+    def setSublevelVertical(self, vertical):
+        vertical = {Qt.Unchecked: 0, Qt.PartiallyChecked: 0, Qt.Checked: 1}[vertical]
+        self.setSublevelProp("vertical", vertical)
+    
+    def setSublevelProp(self, prop, value):
+        level, sublevel, screen = self.getLevel()
+        prev = self.j.levels[level].sublevels[sublevel][prop]
+        if prev != value:
+            self.undoBuffer.push(
+                lambda app: lset(app.j.levels[level].sublevels[sublevel], prop, value),
+                lambda app: lset(app.j.levels[level].sublevels[sublevel], prop, prev),
+                lambda app: app.restoreLayoutContext(level, sublevel),
+                lambda app: app.updateLay()
+            )
     
     def updateChunkLabel(self):
         level = self.sel_level
         chunks = model.getLevelChunks(self.j, level)
         chidx = self.chunkSelected.get(level, None)
         text = ""
-        if chidx == 0 or chidx is None:
+        if chidx is None:
+            text = "Select a chunk to edit."
+        elif chidx == 0:
             text = "Chunk $00 is not editable."
         elif chidx >= len(chunks):
             text = "(Error: OoB)"
@@ -1063,6 +1165,40 @@ class MainWindow(QMainWindow):
         
         self.chunkEditLabel.setText(text)
         self.chunkEditLabel.update()
+    
+    def restoreLayoutContext(self, level, sublevel):
+        self.setLevel(level-1)
+        self.setSublevel(sublevel)
+        self.tabs.setCurrentWidget(self.layTab)
+    
+    def updateLay(self):
+        jl, jsl, js = self.getLevelJ()
+        level, sublevel, screen = self.getLevel()
+        for w in self.layWidgets:
+            w.blockSignals(True)
+        self.sublevelVerticalScrollingCheckbox.setCheckState(Qt.Checked if jsl.vertical == 1 else Qt.Unchecked)
+        self.sublevelStartXBox.setValue(jsl.startx)
+        self.sublevelStartYBox.setValue(jsl.starty)
+        selCoords = self.sel_screencoords.get((level, sublevel), None)
+        text = "(Select a screen.)"
+        t = 0
+        if selCoords is not None:
+            x, y = selCoords
+            s = jsl.layout[x][y] & 0xF
+            text = f"Screen {s:X} at ({x:X}, {y:X})"
+            t = jsl.layout[x][y] >> 4
+        for button, name in zip(self.layoutScreenScrollButtons, SCREENSCROLLNAMES_V if jsl.vertical == 1 else SCREENSCROLLNAMES_H):
+            button.setEnabled(selCoords is not None)
+            button.setText(name)
+            if selCoords is None:
+                button.setChecked(False)
+            elif SCREENSCROLLS[name] == t:
+                button.setChecked(True)
+                
+        self.screenLabel.setText(text)
+        self.layGrid.update()
+        for w in self.layWidgets:
+            w.blockSignals(False)
     
     def setLevel(self, level):
         sender = self.sender()
@@ -1096,7 +1232,7 @@ class MainWindow(QMainWindow):
         
         self.setScreen(self.sel_screen.get((self.sel_level, self.sel_sublevel[self.sel_level]), 0), True)
         
-        self.layGrid.update()
+        self.updateLay()
         
     def undo(self):
         self.undoBuffer.undo()
@@ -1106,6 +1242,10 @@ class MainWindow(QMainWindow):
         
     def setScreen(self, screen, sublevelChanged=False):
         sender = self.sender()
+        
+        # TODO: if there is only 1 copy of the screen, set screencoords to its coords
+        self.sel_screencoords[(self.sel_level, self.sel_sublevel[self.sel_level])] = None
+        
         self.sel_screen[(self.sel_level, self.sel_sublevel[self.sel_level])] = screen
         screens = [f"Screen ${i:02X}" for i, sc in enumerate(self.j.levels[self.sel_level].sublevels[self.sel_sublevel[self.sel_level]].screens)]
         for qcb in self.qcb_screens:
@@ -1123,7 +1263,11 @@ class MainWindow(QMainWindow):
         if self.tabs.currentWidget() == self.entityTab:
             self.updateScreenEntityList()
         
-        self.layGrid.update()
+        self.updateLay()
+        
+    def setScreenCoords(self, x, y):
+        self.sel_screencoords[(self.sel_level, self.sel_sublevel[self.sel_level])] = (x, y)
+        self.updateLay()
     
     def setTile(self, tile):
         prevSelected = self.tileSelected.get(self.sel_level, None)
