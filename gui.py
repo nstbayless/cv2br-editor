@@ -6,10 +6,11 @@ from PySide6.QtWidgets import \
     QApplication, QMainWindow, QPushButton, QLabel, \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
-    QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup
+    QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
 from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot
 import functools
+import copy
 
 def plural(i, singular, plural=None):
     if plural is None:
@@ -796,8 +797,6 @@ class MainWindow(QMainWindow):
         
         self.entpropwidgets = [self.entityIDDropdown, self.entityXBox, self.entityYBox, self.entityMarginBox, self.entityCategoryButtonGroup, *self.entityCategoryButtons]
         
-        # attributes: x, y, margin
-        
         self.entitySelector = QListWidget(self)
         self.entitySelector.setMaximumWidth(240)
         self.entitySelectorWidgetIDMap = {}
@@ -805,6 +804,14 @@ class MainWindow(QMainWindow):
         self.entitySelector.setSelectionMode(QAbstractItemView.SingleSelection)
         cvlay.addWidget(self.entitySelector)
         
+        bhlay = QHBoxLayout()
+        entityCreateButton = QPushButton("Create")
+        entityCreateButton.clicked.connect(self.addEntity)
+        bhlay.addWidget(entityCreateButton)
+        entityDeleteButton = QPushButton("Delete")
+        entityDeleteButton.clicked.connect(self.removeEntity)
+        bhlay.addWidget(entityDeleteButton)
+        cvlay.addLayout(bhlay)
         hlay.addLayout(cvlay)
         vlay.addLayout(hlay)
         
@@ -942,28 +949,46 @@ class MainWindow(QMainWindow):
         js[cat][i:i+1] = []
     
     #adds a generic bat
-    def _addEntity(self, level, sublevel, screen):
+    def _addEntity(self, level, sublevel, screen, cat="enemies", ent=None, i=None):
         jsl = self.j.levels[level].sublevels[sublevel] 
         js = jsl.screens[screen]
-        i = len(js.enemies)
-        e = model.JSONDict()
-        e.x = 0x50
-        e.y = 0x40
-        e.type = 0x1F
-        e.margin = model.getStandardMarginForEntity(e.type, jsl.vertical)
-        js.enemies.append(e)
-        self.entitySelected[(level, sublevel, screen)] = ("enemies", i)
+        if ent is None:
+            e = model.JSONDict()
+            e.x = 0x50
+            e.y = 0x40
+            e.type = 0x1F
+            e.margin = model.getStandardMarginForEntity(e.type, jsl.vertical)
+        else:
+            e = copy.copy(ent)
+        if i is None:
+            i = len(js[cat])
+        js[cat].insert(i, e)
+        self.entitySelected[(level, sublevel, screen)] = (cat, i)
     
     def addEntity(self):
         level, sublevel, screen = self.getLevel()
         
-        
         self.undoBuffer.push(
             lambda app: app._addEntity(level, sublevel, screen),
             lambda app: app._removeEntity(level, sublevel, screen, "enemies"),
-            lambda app: app.restoreEntityContext(),
+            lambda app: app.restoreEntityContext(level, sublevel, screen),
             lambda app: app.updateScreenEntityList()
         )
+    
+    def removeEntity(self):
+        level, sublevel, screen = self.getLevel()
+        jl, jsl, js = self.getLevelJ()
+        level, sublevel, screen = self.getLevel()
+        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
+        if self.entitySelector is not None:
+            cat, i = selectedEntity
+            ent = js[cat][i]
+            self.undoBuffer.push(
+                lambda app: app._removeEntity(level, sublevel, screen, cat, i),
+                lambda app: app._addEntity(level, sublevel, screen, cat, ent, i),
+                lambda app: app.restoreEntityContext(level, sublevel, screen),
+                lambda app: app.updateScreenEntityList()
+            )
     
     def updateScreenEntityList(self):
         jl, jsl, js = self.getLevelJ()
