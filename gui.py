@@ -6,9 +6,9 @@ from PySide6.QtWidgets import \
     QApplication, QMainWindow, QPushButton, QLabel, \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
-    QAbstractItemView, QSpinBox
+    QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence
-from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent
+from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot
 import functools
 
 def plural(i, singular, plural=None):
@@ -734,6 +734,20 @@ class MainWindow(QMainWindow):
         hlay.addWidget(self.chunkSelectors[-1])
         vlay.addLayout(hlay)
         
+    def addRadioButtons(self, *labels, **kwargs):
+        hlay = QHBoxLayout()
+        if "label" in kwargs:
+            l = QLabel()
+            l.setText(kwargs["label"])
+            l.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            hlay.addWidget(l)
+        bg = QButtonGroup()
+        buttons = []
+        for label in labels:
+            buttons.append(QRadioButton(label))
+            hlay.addWidget(buttons[-1])
+        return bg, buttons, hlay
+        
     def addSpinBoxWithLabel(self, label, min, max):
         hlay = QHBoxLayout()
         l = QLabel()
@@ -765,6 +779,13 @@ class MainWindow(QMainWindow):
         self.entityIDDropdown.currentIndexChanged.connect(self.setEntityID)
         cvlay.addWidget(self.entityIDDropdown)
         
+        self.entityCategoryButtonGroup, self.entityCategoryButtons, cvhlay = self.addRadioButtons(*CATS)
+        for i, button in enumerate(self.entityCategoryButtons):
+            def on_button_clicked(id):
+                self.setEntityCategory(CATS[id])
+            button.clicked.connect(functools.partial(on_button_clicked, i))
+        cvlay.addLayout(cvhlay)
+        
         self.entityXBox, cvhlay = self.addSpinBoxWithLabel("x: ", 0, 0x9F)
         self.entityXBox.valueChanged.connect(functools.partial(self.setEntityProp, "x"))
         cvlay.addLayout(cvhlay)
@@ -775,7 +796,7 @@ class MainWindow(QMainWindow):
         self.entityMarginBox.valueChanged.connect(functools.partial(self.setEntityProp, "margin"))
         cvlay.addLayout(cvhlay)
         
-        self.entpropwidgets = [self.entityIDDropdown, self.entityXBox, self.entityYBox, self.entityMarginBox]
+        self.entpropwidgets = [self.entityIDDropdown, self.entityXBox, self.entityYBox, self.entityMarginBox, self.entityCategoryButtonGroup, *self.entityCategoryButtons]
         
         # attributes: x, y, margin
         
@@ -867,26 +888,84 @@ class MainWindow(QMainWindow):
         else:
             self.entitySelected[(level, sublevel, screen)] = None
         self.updateScreenEntityList()
-        
+    
+    def restoreEntityContext(app, level, sublevel, screen):
+        app.setLevel(level-1)
+        app.setSublevel(sublevel)
+        app.setScreen(screen)
+        app.tabs.setCurrentWidget(app.entityTab)
+    
     def setEntityProp(self, prop, value):
         level, sublevel, screen = self.getLevel()
         selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
-        if self.entitySelector is not None:
+        if selectedEntity is not None:
             cat, i = selectedEntity
             prev = self.j.levels[level].sublevels[sublevel].screens[screen][cat][i][prop]
             if prev != value:
-                def restore(app):
-                    app.setLevel(level-1)
-                    app.setSublevel(sublevel)
-                    app.setScreen(screen)
-                    app.tabs.setCurrentWidget(self.entityTab)
+                    
                 self.undoBuffer.push(
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, value),
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, prev),
-                    restore,
+                    lambda app: app.restoreEntityContext(),
                     lambda app: app.updateScreenEntityList()
                 )
                 self.updateScreenEntityList()
+    
+    def setEntityCategory(self, cat):
+        level, sublevel, screen = self.getLevel()
+        selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
+        if selectedEntity is not None:
+            prevcat, i = selectedEntity
+            if prevcat != cat:                
+                def moveCat(_src, _dst, _srcidx, _dstidx, app):
+                    jl, jsl, js = app.getLevelJ()
+                    if _srcidx is None:
+                        _srcidx = len(js[_src]-1)
+                    if _dstidx is None:
+                        _dstidx = len(js[_dst])
+                    ent = js[_src][_srcidx]
+                    js[_src][_srcidx:_srcidx+1] = []
+                    js[_dst].insert(_dstidx, ent)
+                    app.entitySelected[(level, sublevel, screen)] = (cat, len(js[cat])-1)
+                    
+                self.undoBuffer.push(
+                    functools.partial(moveCat, prevcat, cat, i, None),
+                    functools.partial(moveCat, cat, prevcat, None, i),
+                    lambda app: app.restoreEntityContext(),
+                    lambda app: app.updateScreenEntityList()
+                )
+                self.updateScreenEntityList()
+    
+    def _removeEntity(self, level, sublevel, screen, cat, i=None):
+        jsl = self.j.levels[level].sublevels[sublevel] 
+        js = jsl.screens[screen]
+        if i is None:
+            i = len(js[cat]) - 1
+        js[cat][i:i+1] = []
+    
+    #adds a generic bat
+    def _addEntity(self, level, sublevel, screen):
+        jsl = self.j.levels[level].sublevels[sublevel] 
+        js = jsl.screens[screen]
+        i = len(js.enemies)
+        e = model.JSONDict()
+        e.x = 0x50
+        e.y = 0x40
+        e.type = 0x1F
+        e.margin = model.getStandardMarginForEntity(e.type, jsl.vertical)
+        js.enemies.append(e)
+        self.entitySelected[(level, sublevel, screen)] = ("enemies", i)
+    
+    def addEntity(self):
+        level, sublevel, screen = self.getLevel()
+        
+        
+        self.undoBuffer.push(
+            lambda app: app._addEntity(level, sublevel, screen),
+            lambda app: app._removeEntity(level, sublevel, screen, "enemies"),
+            lambda app: app.restoreEntityContext(),
+            lambda app: app.updateScreenEntityList()
+        )
     
     def updateScreenEntityList(self):
         jl, jsl, js = self.getLevelJ()
@@ -894,9 +973,9 @@ class MainWindow(QMainWindow):
         selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
         if self.entitySelector is not None:
             self.entitySelector.blockSignals(True)
-            self.entityIDDropdown.setEnabled(selectedEntity is not None)
-            self.entityXBox.setEnabled(selectedEntity is not None)
-            self.entityYBox.setEnabled(selectedEntity is not None)
+            for w in self.entpropwidgets:
+                if w is not self.entityCategoryButtonGroup:
+                    w.setEnabled(selectedEntity is not None)
             self.entityMarginBox.setEnabled(selectedEntity is not None and model.getScreenEdgeType(self.j, level, sublevel, screen) != 0xB)
             selector = self.entitySelector
             self.entitySelectorWidgetIDMap = {}
@@ -915,6 +994,11 @@ class MainWindow(QMainWindow):
                             self.entityIDDropdown.setCurrentIndex(ent.type-1)
                             self.entityXBox.setValue(ent.x)
                             self.entityYBox.setValue(ent.y)
+                            for button in self.entityCategoryButtons:
+                                if button.text() == cat:
+                                    button.setChecked(True)
+                                    break
+
                             self.entityMarginBox.setValue(ent.margin)
                             for w in self.entpropwidgets:
                                 w.blockSignals(False)
