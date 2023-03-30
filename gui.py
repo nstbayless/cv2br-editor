@@ -675,10 +675,10 @@ class RoomLayWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
-        self.nes, self.j = model.loadRom("base-us.gb")
+        self.rom, self.j = model.loadRom("base-us.gb")
         model.addEmptyScreens(self.j)
         self.undoBuffer = UndoBuffer(self)
-        self.vram = VRam(self.j, self.nes)
+        self.vram = VRam(self.j, self.rom)
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
         self.sel_screen = {}
@@ -736,7 +736,7 @@ class MainWindow(QMainWindow):
         self.actSaveAs.setShortcut(QKeySequence("ctrl+shift+s"))
         
         self.actExport = QAction("&Export ROM...", self)
-        self.actExport.triggered.connect(functools.partial(self.onFileIO, "nes", 2))
+        self.actExport.triggered.connect(functools.partial(self.onFileIO, "rom", 2))
         self.actExport.setShortcut(QKeySequence("ctrl+e"))
         
         self.actUndo = QAction("&Undo", self)
@@ -1215,7 +1215,7 @@ class MainWindow(QMainWindow):
         if chidx is None:
             text = "Select a chunk to edit."
         elif chidx == 0:
-            text = "Chunk $00 is not editable."
+            text = "Chunk 0 is not editable."
         elif chidx >= len(chunks):
             text = "(Error: OoB)"
         else:
@@ -1236,12 +1236,16 @@ class MainWindow(QMainWindow):
                     if not (set([level]) >= set(levelsused)):
                         text += f"\n...including appearances in other levels as a glitch chunk"
         
+        addTile = False
         if self.chunkEdit.hoverPos is not None:
             x, y = self.chunkEdit.hoverPos
             chunk = self.chunkEdit.getChunk()
             if chunk is not None:
                 tidx = chunk[x + y * 4]
                 text += f"\nTile ${tidx:04X}"
+                addTile = True
+        if not addTile:
+            text += f"\nTile $- - - -"
         
         self.chunkEditLabel.setText(text)
         self.chunkEditLabel.update()
@@ -1407,12 +1411,16 @@ class MainWindow(QMainWindow):
             if chunk is not None:
                 selector.widgets[chunk].update()
                 selector.ensureWidgetVisible(selector.widgets[chunk])
-            
     
     # load = 0
     # save = 1
     # saveas = 2
     def onFileIO(self, target, save):
+        if target == "rom":
+            print("Exporting rom...")
+            regions, errors = model.saveRom(self.rom, self.j, "hack.gb")
+            for error in errors:
+                print(error)
         pass
         
 app = QApplication(sys.argv)

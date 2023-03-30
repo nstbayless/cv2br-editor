@@ -33,6 +33,8 @@ def produce_sublevel_screen_arrangement(level, sublevel):
     buff = [[0 for j in range(16)] for i in range(16)]
     while True:
         dst = readword(BANK6, screenbuffaddr)
+        # very wasteful! This byte is always 0xDD!
+        assert (dst >> 8) == 0xDD
         x=dst%0x10
         y=(dst//0x10)%0x10
         screenbuffaddr += 2
@@ -441,7 +443,7 @@ PALETTE = [
 ]
 
 ENTPALETTES = [
-    (0xff, 0xa0, 0x40), # misc
-    (0x40, 0x40, 0xff), # enemies
-    (0x90, 0x80, 0x20), # items
+    (0x5C, 0xCE, 0x98), # misc
+    (0xA5, 0x86, 0x14), # enemies
+    (0xEE, 0x6F, 0xA4), # items
 ]
