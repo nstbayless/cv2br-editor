@@ -149,6 +149,7 @@ with open("leveldata.asm", "w") as f:
         write("")
         #write(f"org ${addr:04X}")
         #write(f"banksk{BANK2:X}")
+        write(f"; addr={rom.BANK2:X}:{addr:04X}")
         write(f"{level}_Tile_Chunks:")
         if level == "Drac2":
             write(f"Drac3_Tile_Chunks:")
@@ -183,7 +184,6 @@ with open("leveldata.asm", "w") as f:
         else:
             write(f"    dw Lvl{level}_ScreenLayout")
         
-    
     for i, level in enumerate(rom.LEVELS):
         if level is not None:
             addr = rom.readtableword(rom.BANK6, rom.LEVEL_SCREEN_TABLE, i)
@@ -296,8 +296,9 @@ endm
     def writese2(s):
         screenentdata2[0] += s + "\n"
     writese("")
-    writese(f"org ${rom.SCREEN_ENT_TABLE:04X}")
-    writese(f"banksk{rom.BANK:X}")
+    #writese(f"org ${rom.SCREEN_ENT_TABLE:04X}")
+    #writese(f"banksk{rom.BANK:X}")
+    writese(f"; addr={rom.BANK:X}:{rom.SCREEN_ENT_TABLE:04X}")
     writese(f"entity_table_index_by_screen:")
     for i, level in enumerate(rom.LEVELS):
         if level is None:
@@ -320,7 +321,7 @@ endm
                 screen_ents_end = rom.get_entry_end(rom.BANK3, rom.SCREEN_ENT_TABLE, i, sublevel)
                 screenc = (screen_ents_end - screen_ents_begin)//2
                 writese("")
-                if i == 1 and sublevel == 0:
+                if i == 1 and sublevel == 0 and False:
                     writese(f"org ${screen_ents_begin:04X}")
                     writese(f"banksk{rom.BANK3:X}")
                 else:
@@ -339,7 +340,7 @@ endm
                     entsmax = rom.readword(rom.BANK3, screen_ents_end) if level != "Drac3" else entsaddr + 10
                     writese(f"    dw Lvl{level}_{sublevel}_{screen}_ScreenEnts")
                     writese2(f"")
-                    if entsaddr != prevaddr:
+                    if entsaddr != prevaddr and prevaddr is not None:
                         writese2(f"org ${entsaddr:04X}")
                         writese2(f"banksk{rom.BANK3:X}")
                     else:
@@ -372,12 +373,14 @@ endm
                         writese2(f"    dw {label} ; address")
                     prevaddr = entsaddr
     
-    for table_addr, table_name in rom.LEVTABS_AND_NAMES:
+    for i, (table_addr, table_name) in enumerate(rom.LEVTABS_AND_NAMES):
         write("")
-        write(f"""
-org ${table_addr:04X}
-banksk{rom.BANK:X}
-table_level_{table_name}:""")
+        if i == 0:
+            write(f"org ${table_addr:04X}")
+            write(f"banksk{rom.BANK:X}")
+        else:
+            write(f"; addr={rom.BANK:X}:{table_addr:04X}")
+        write(f"table_level_{table_name}:")
         
         leveldata = [""]
         leveltables = ""

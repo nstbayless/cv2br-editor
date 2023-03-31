@@ -129,6 +129,7 @@ def loadSublevelScreenEntities(j, level, sublevel):
                     je.x = ent["x"]
                     je.y = ent["y"]
                     je.type = ent["type"]
+                    je.slot = ent["slot"]
                     jents.append(je)
                     margin = ent.get("margin-x", ent.get("margin-y", ent.get("margin")))
                     if margin is not None:
@@ -244,7 +245,7 @@ def getChunkUsage(j, clevel, chidx, infodepth=4):
                     for x in range(5):
                         for y in range(4):
                             if js.data[y][x] == chidx + compoffset:
-                                uses += tuple([level, sublevel, screen, (y, x)][:infodepth])
+                                uses.append(tuple([level, sublevel, screen, (y, x)][:infodepth]))
     return uses
 
 def addEmptyScreens(j):
@@ -285,7 +286,8 @@ def getScreenPortals(j, level, sublevel, screen):
     jsl = jl.sublevels[sublevel]
     js = jsl.screens[screen]
     chunks = getLevelChunksAndGlitchChunks(j, level)
-    ROPES = [0x1B, 0xF0, 0x28, 0x39]
+    ROPES = [0x1B]
+    # FIXME: find the way that secret ropes occur... probably by entities?
     portals = set()
     for x in range(5):
         for ydir, y in [(-1, 0), (1, 3)]:
@@ -315,6 +317,11 @@ def getScreenEnterable(j, level, sublevel, x, y):
         return True
     if jsl.layout[x][y] == 0:
         return False
+    if jsl.layout[x][y] >> 4 == 0xB:
+        # we just assume that all 1x1 enclosed screens are enterable
+        # surely the user would remove it if it weren't..?
+        # This saves us from having to check for hidden ropes, as in the base game they all connect to 1x1 rooms.
+        return True
     for xoff, yoff in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
         if x + xoff in range(16):
             neighbour = jsl.layout[x+xoff][(y+yoff + 16) % 16]
@@ -355,6 +362,51 @@ class SaveContext:
                 "addr": rom.LEVTAB_TILES_BANK2,
                 "bank": rom.BANK2,
             },
+            # could combine this with the above, which ends at the same spot
+            # we just need to adjust calls to the routine at $4316
+            "SublevelVertical": {
+                "shortname": "SLV",
+                "max":  0x4339 - 0x4316,
+                "addr": rom.LEVEL_SCROLLDIR_TABLE-10, # routine before this table is 10 bytes, and we rewrite it.
+                "bank": rom.BANK2,
+            },
+            "ChunkTable": {
+                "shortname": "CT",
+                "max": 0x10,
+                "addr": rom.LEVTAB_TILES4x4_BANK2,
+                "bank": rom.BANK2,
+            },
+            "ChunkValues": {
+                "shortname": "CV",
+                "max": 0x6500 - 0x44C0 + 0x820,
+                "addr": rom.TILES4x4_BEGIN,
+                "bank": rom.BANK2,
+            },
+            # could combine the next four into one if we edit the accesses to their base addresses.
+            "Entmisc": {
+                "shortname": "EM",
+                "max": rom.LEVTAB_B - rom.LEVTAB_A,
+                "addr": rom.LEVTAB_A,
+                "bank": rom.BANK3,
+            },
+            "Entenemies": {
+                "shortname": "EE",
+                "max": rom.LEVTAB_C - rom.LEVTAB_B,
+                "addr": rom.LEVTAB_B,
+                "bank": rom.BANK3,
+            },
+            "Entitems": {
+                "shortname": "EI",
+                "max": rom.SCREEN_ENT_TABLE - rom.LEVTAB_C,
+                "addr": rom.LEVTAB_C,
+                "bank": rom.BANK3,
+            },
+            "EntLookup": {
+                "shortname": "EL",
+                "max": 0x6991 - 0x62C1,
+                "addr": rom.SCREEN_ENT_TABLE,
+                "bank": rom.BANK3,
+            },
             "ScreenTiles": {
                 "shortname": "ST",
                 "max": 0x73F8 - 0x62B4 + 20 * 5,
@@ -365,20 +417,25 @@ class SaveContext:
                 "shortname": "L",
                 "max": 0x52C1 - 0x5020 + 12,
                 "addr": rom.LEVEL_SCREEN_TABLE,
-                "bank": rom.BANK6
+                "bank": rom.BANK6,
             }
         })
-        self.regionc = JSONDict()
         for key in self.regions.keys():
             self.regions[key] = JSONDict(self.regions[key])
             self.regions[key].key = key
-            self.regionc[key] = 0
+            self.regions[key].used = 0
         
-        # maps (sublevel, level) -> list[(x, y, l)]
+        # maps (level, sublevel) -> list[(x, y, l)]
         self.uniqueScreens = dict()
         
-        # maps (sublevel, level, x, y) -> index in ctx.uniqueScreens[sublevel, level]
+        # maps (level, sublevel, x, y) -> index in ctx.uniqueScreens[sublevel, level]
         self.screenRemap = dict()
+        
+        # maps (level, sublevel) -> int (index into self.uniqueScreens[(level, sublevel)])
+        self.numPriorityUniqueScreens = dict()
+        
+        # maps (level, sublevel, cat, uscreen) -> 
+        self.enterableScreenData = dict()
     
     # returns screen, js
     def getUniqueScreenOriginalScreen(self, level, sublevel, uscreen):
@@ -388,8 +445,8 @@ class SaveContext:
         return s, self.j.levels[level].sublevels[sublevel].screens[s]
     
     def romaddr(self, bank, addr):
-        if addr < 0x4000 and bank != 0:
-            raise Exception(f"Address out of bounds for bank {bank}")
+        if (addr < 0x4000 and bank != 0) or (addr >= 0x4000 and bank == 0) or addr >= 0x8000:
+            raise Exception(f"Address {addr:04X} out of bounds for bank {bank:X}")
         return bank * 0x4000 + addr % 0x4000
     
     def writeByte(self, bank, addr, v):
@@ -426,12 +483,12 @@ def _saveRom(ctx: SaveContext):
         writeRom(ctx)
         
         for key in ctx.regions.keys():
-            c = ctx.regionc[key]
-            m = ctx.regions[key]["max"]
+            c = ctx.regions[key].used
+            m = ctx.regions[key].max
             if c > m:
                 ctx.errors.append(f"Region \"{key}\" exceeded ({c:04X} > {m:04X} bytes)")
                 
-        return [(key, ctx.regionc[key], ctx.regions[key]["max"]) for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
+        return [(key, ctx.regions[key].used, ctx.regions[key].max) for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
     except Exception as e:
         errors = [f"Fatal: {e}\n{traceback.format_exc()}"]
         regions = [(key, None, ctx.regions[key]["max"]) for key in ctx.regions.keys()]
@@ -443,6 +500,9 @@ def writeRom(ctx: SaveContext):
     constructScreenRemapping(ctx)
     writeScreenTiles(ctx)
     writeScreenLayout(ctx)
+    writeSublevelVertical(ctx)
+    writeEntities(ctx)
+    writeChunks(ctx)
     
 def constructScreenRemapping(ctx: SaveContext):
     for i, jl in enumerate(ctx.j.levels):
@@ -499,9 +559,9 @@ def constructScreenRemappingForSublevel(ctx: SaveContext, level: int, sublevel: 
     
     def getPriority(x, y):
         priority = 0 if enterable[x][y] else 2
+        if (x, y) == (jsl.startx, jsl.starty):
+            priority = -2
         if sublevel > 0:
-            if (x, y) == (jsl.startx, jsl.starty):
-                priority = -2
             # TODO: we can do slightly better by figuring out which of (x-1,y) and (x+1,y) is relevant,
             # given direction previous sublevel exits.
             if (jsl.startx, jsl.starty) in [(x-1, y), (x+1, y)]:
@@ -534,9 +594,13 @@ def constructScreenRemappingForSublevel(ctx: SaveContext, level: int, sublevel: 
         #print(level, sublevel+1, uniqueScreensPriority)
         if len(jl.sublevels[sublevel-1]) + numPrioritizedScreens + numNonPrioritizedPreviewScreens > 0x10:
             # move preview screens so that they are at the start
-            print(level, sublevel+1, uniqueScreensPriority)
+            # unusual behaviour, so let's print it out in case it causes problems.
+            print(f"{rom.LEVELS[level]}-{sublevel+1} - Remapping some screen IDs to allow previous sublevel access to the start-adjacent room(s)...")
+            print("<- ", level, sublevel+1, uniqueScreensPriority)
             uniqueScreensPriority = [(u if u != 1 else -1) for u in uniqueScreensPriority]
-            print(level, sublevel+1, uniqueScreensPriority)
+            print(" -> ", level, sublevel+1, uniqueScreensPriority)
+    
+    ctx.numPriorityUniqueScreens[(level, sublevel)] = sum([p <= 0 for p in uniqueScreensPriority])
     
     # remap unique screens to ensure the enterable ones come first, and starting room is the very first.
     remapEnterable = sorted(list(range(len(uniqueScreens))), key=lambda i: uniqueScreensPriority[i])
@@ -598,6 +662,8 @@ def writeScreenTiles(ctx: SaveContext):
                             # TODO: remap chunks also :)
                             ctx.writeByte(bank, addr, js.data[y][x])
                             addr += 1
+    ctx.regions.ScreenTilesTable.used = tsaddr - ctx.regions.ScreenTilesTable.addr
+    ctx.regions.ScreenTiles.addr = addr - ctx.regions.ScreenTiles.addr
 
 # gives a (massive) over-approximation in cover sets for this sublevel
 def constructScreenCoverSets(ctx: SaveContext, level, sublevel):
@@ -615,7 +681,7 @@ def constructScreenCoverSets(ctx: SaveContext, level, sublevel):
     csets = []
     cvalues = set()
     MAXMARGIN = 5 # because every packet requires 4 bytes of padding
-    layout = constructRemappedLayoutWithPreviewRoom(ctx, level, sublevel)
+    layout = constructRemappedLayout(ctx, level, sublevel, True)
     for x in range(16):
         for y in range(16):
             if layout[x][y] > 0:
@@ -642,7 +708,7 @@ def constructScreenCoverSets(ctx: SaveContext, level, sublevel):
                         csets.append(copy.copy(cset))
     return cvalues, csets
 
-def constructRemappedLayoutWithPreviewRoom(ctx: SaveContext, level, sublevel):
+def constructRemappedLayout(ctx: SaveContext, level, sublevel, preview=False):
     jl = ctx.j.levels[level]
     jsl = jl.sublevels[sublevel]
     layout = copy.deepcopy(jsl.layout)
@@ -653,31 +719,32 @@ def constructRemappedLayoutWithPreviewRoom(ctx: SaveContext, level, sublevel):
                 layout[x][y] &= 0xF0
                 assert ctx.screenRemap[(level, sublevel, x, y)] < 0x10
                 layout[x][y] |= ctx.screenRemap[(level, sublevel, x, y)] & 0x0F
-                for xoff in getScreenExitDoor(ctx.j, level, sublevel, jsl.layout[x][y] & 0xF):
-                    if jsl is jl.sublevels[-1]:
-                        ctx.errors += "Sublevel door on final sublevel of {jl.name}"
-                    else:
-                        jsl2 = jl.sublevels[sublevel+1]
-                        for i in range(2):
-                            key = (level, sublevel+1, jsl2.startx + xoff*i, jsl2.starty)
-                            nextsublevelscreen = ctx.screenRemap[key] if key in ctx.screenRemap else None
-                            if nextsublevelscreen is not None:
-                                #print(level, sublevel, f"{nextsublevelscreen:02X}", len(ctx.uniqueScreens[(level, sublevel)]))
-                                nextsublevelscreent = (nextsublevelscreen & 0x0F) + len(ctx.uniqueScreens[(level, sublevel)])
-                                if nextsublevelscreent >= 0x10:
-                                    ctx.errors += [f"{rom.LEVELS[level]}-{sublevel+1} uses more than 15 unique screens when including preview screens for {rom.LEVELS[level]}-{sublevel+2}"]
-                                _x = (x + xoff*(i+1) + 0x10) % 0x10
-                                if layout[_x][y] > 0:
-                                    ctx.errors += [f"Unable to place next-sublevel-preview screen for {rom.LEVELS[level]}-{sublevel+1}, as it is coincident with an existing screen."]
-                                else:
-                                    layout[_x][y] = nextsublevelscreent | 0x80
+                if preview:
+                    for xoff in getScreenExitDoor(ctx.j, level, sublevel, jsl.layout[x][y] & 0xF):
+                        if jsl is jl.sublevels[-1]:
+                            ctx.errors += "Sublevel door on final sublevel of {jl.name}"
+                        else:
+                            jsl2 = jl.sublevels[sublevel+1]
+                            for i in range(2):
+                                key = (level, sublevel+1, jsl2.startx + xoff*i, jsl2.starty)
+                                nextsublevelscreen = ctx.screenRemap[key] if key in ctx.screenRemap else None
+                                if nextsublevelscreen is not None:
+                                    #print(level, sublevel, f"{nextsublevelscreen:02X}", len(ctx.uniqueScreens[(level, sublevel)]))
+                                    nextsublevelscreent = (nextsublevelscreen & 0x0F) + len(ctx.uniqueScreens[(level, sublevel)])
+                                    if nextsublevelscreent >= 0x10:
+                                        ctx.errors += [f"{rom.LEVELS[level]}-{sublevel+1} uses more than 15 unique screens when including preview screens for {rom.LEVELS[level]}-{sublevel+2}"]
+                                    _x = (x + xoff*(i+1) + 0x10) % 0x10
+                                    if layout[_x][y] > 0:
+                                        ctx.errors += [f"Unable to place next-sublevel-preview screen for {rom.LEVELS[level]}-{sublevel+1}, as it is coincident with an existing screen."]
+                                    else:
+                                        layout[_x][y] = nextsublevelscreent | 0x80
     return layout
                 
-def produceScreenLayoutPackets(ctx: SaveContext, level, sublevel):
+def produceScreenLayoutPackets(ctx: SaveContext, level, sublevel, addr):
     if level == 0:
         return None
     jsl = ctx.j.levels[level].sublevels[sublevel]
-    layout = constructRemappedLayoutWithPreviewRoom(ctx, level, sublevel)
+    layout = constructRemappedLayout(ctx, level, sublevel, True)
     cvalues, csets = constructScreenCoverSets(ctx, level, sublevel)
     outsets = []
     def sortkey(cset):
@@ -757,6 +824,23 @@ def writeScreenLayout(ctx: SaveContext):
     addr = ctx.regions.Layouts.addr
     bank = ctx.regions.Layouts.bank
     addr = writeSublevelTableData(ctx, addr, bank, produceScreenLayoutPackets)
+    ctx.regions.Layouts.used = addr - ctx.regions.Layouts.addr
+
+def writeLevelTableData(ctx: SaveContext, addr, bank, cb):
+    taddr = addr
+    addr += 8*2
+    for level, jl in enumerate(ctx.j.levels):
+        taddr += 2
+        if level == 0:
+            taddr += 2
+        else:
+            ctx.writeWord(bank, taddr, addr)
+            hunk = cb(ctx, level, addr)
+            for b in hunk:
+                ctx.writeByte(bank, addr, b)
+                addr += 1
+    
+    return addr
 
 def writeSublevelTableData(ctx: SaveContext, addr, bank, cb):
     taddr = addr
@@ -773,8 +857,338 @@ def writeSublevelTableData(ctx: SaveContext, addr, bank, cb):
             for sublevel, jsl in enumerate(jl.sublevels):
                 ctx.writeWord(bank, tsaddr, addr)
                 tsaddr += 2
-                hunk = cb(ctx, level, sublevel)
+                hunk = cb(ctx, level, sublevel, addr)
                 for b in hunk:
                     ctx.writeByte(bank, addr, b)
                     addr += 1
+    return addr
+
+def writeSublevelVertical(ctx: SaveContext):
+    # the old routine at 2:4316 was too restrictive and compressed.
+    # solving the shortest-superstring problem is too hard and unlikely to be small.
+    # we introduce an entirely new routine for loading this bit.
+    """
+    set_sublevel_vertical:
+        ld a, ($c8c1)  ; 3 ; (or c8c0 if sublevel-major)
+        ld b, a        ; 1
+        ; inc b if sublevel-major
+        ld hl, table   ; 3
+        ld a, ($c8c0)  ; 3  ; (or c8c1 if sublevel-major)
+        rst $28        ; 1
+        ld a, (hl)     ; 1
+        
+    routine:
+        add a, a       ; 1
+        dec b          ; 1
+        jr nz, routine ; 1
+
+    done:
+        sbc a, a       ; 1
+        inc a          ; 1
+        ld ($ca95), a  ; 3
+        ret            ; 1
+
+    table:
+    """
+    
+    addr = ctx.regions.SublevelVertical.addr
+    bank = ctx.regions.SublevelVertical.bank
+    
+    level_count = len(ctx.j.levels)-1
+    sublevel_count = max([len(jl.sublevels) for jl in ctx.j.levels[1:]])
+    
+    # we prefer sublevel-major because we can save an 'inc b' operation
+    level_major = level_count > 8
+    if level_major and sublevel_count > 8:
+        # In this case, we can fall back on another routine...?
+        raise Exception("sublevel vertical routine requires either a maximum of 8 sublevels *or* 8 levels")
+    
+    ROUTINE_LEN = 23 if level_major else 22
+    table_addr = addr + ROUTINE_LEN - (1 if level_major else 0)
+    data = [
+        0xFA, 0xC1 if level_major else 0xC0, 0xC8, #ld a, (...)
+        0x47, # ld b, a
+        *([0x04] if level_major else []),      # inc b
+        0x21, table_addr & 0xFF, table_addr >> 8,  #ld hl, ...
+        0xFA, 0xC0 if level_major else 0xC1, 0xC8,
+        0xEF, # rst $28 (hl += a)
+        0x7E, # ld a, (hl)
+        0x87, # add a, a
+        0x05, # dec bc
+        0x20, 0xFC, # jr nz, ...
+        0x9F, # sbc a, a
+        0x3C, # inc a
+        0xEA, 0x95, 0xCA, # ld ($CA95), a
+        0xC9 # ret
+    ]
+    assert len(data) == ROUTINE_LEN
+    table = [0] * (level_count if level_major else sublevel_count)
+    for level, jl in enumerate(ctx.j.levels):
+        if level > 0:
+            for sublevel, jsl in enumerate(jl.sublevels):
+                def lsh(i):
+                    return 1 << (7 - i)
+                if jsl.vertical == 0:
+                    if level_major:
+                        table[level-1] |= lsh(sublevel)
+                    else:
+                        table[sublevel] |= lsh(level-1)
+    
+    for b in data + table:
+        ctx.writeByte(bank, addr, b)
+        addr += 1
+    ctx.regions.SublevelVertical.used = addr - ctx.regions.SublevelVertical.addr
+
+def getSublevelRemappedLayout(ctx: SaveContext, level, sublevel):
+    layout = copy.deepcopy(ctx.j.levels[level].sublevels[sublevel])
+    for x in range(16):
+        for y in range(16):
+            if layout[x][y] > 0:
+                key = (level, sublevel, x, y)
+                assert key in ctx.screenRemap
+                layout[x][y] &= 0xF0
+                layout[x][y] &= 0xF0
+
+def floodfillFindContinuousRoomHelper(layout, x, y, dir, stop):
+    xstart = x 
+    ystart = y
+    coords = []
+    while layout[x][y] > 0:
+        coords.append((x, y))
+        if (layout[x][y] >> 4) in stop:
+            break
+        x += dir[0]
+        y += dir[1]
+        if (x, y) == (xstart, ystart):
+            break
+    return coords
                 
+def floodfillFindContinuousRoom(layout, x, y, vertical):
+    dirinc = (0, 1) if vertical else (1, 0)    
+    dirdec = (0, -1) if vertical else (-1, 0)
+    return (list(reversed(floodfillFindContinuousRoomHelper(layout, x, y, dirdec, [0xB, 0xA]))) +
+     floodfillFindContinuousRoomHelper(layout, x, y, dirinc, [0xB, 0x9])[1:])[:16]
+
+def cameraArithmetic(screen, offset, axismax):
+    s = screen * axismax + offset
+    return [((s // axismax) + 16) % 16, (((s + axismax) % axismax) + axismax) % axismax]
+
+def getDataForEnt(sx, sy, vertical, condensed, ent):
+    if condensed:
+        return [ent.slot, ent.type, ent.x, ent.y]
+    elif vertical:
+        ca = cameraArithmetic(sy, ent.y-ent.margin, 0x80)
+        ca[0] |= 0x80
+        return [*ca, ent.slot, ent.type, ent.x, ent.margin]
+    else:
+        return [*cameraArithmetic(sx, ent.x-ent.margin, 0xA0), ent.slot, ent.type, ent.margin, ent.y]
+
+def produceEntityPackets(ctx: SaveContext, level, sublevel, cat, addr):
+    jsl = ctx.j.levels[level].sublevels[sublevel]
+    vertical = jsl.vertical == 1
+    layout = constructRemappedLayout(ctx, level, sublevel)
+    enterable = getEnterabilityLayout(ctx.j, level, sublevel)
+    processed = [[None for y in range(16)] for x in range(16)] # (x, y) -> seckey | None
+    
+    SLOTMAX = {"misc": 8, "enemies": 8, "items": 4}[cat]
+    
+    enterableCoords = [(x, y) for x, col in enumerate(enterable) for y, val in enumerate(col) if val]
+    
+    # populate ents table
+    entsc = [[None for y in range(16)] for x in range(16)]
+    for x in range(16):
+        for y in range(16):
+            if layout[x][y] > 0:
+                idx, js = ctx.getUniqueScreenOriginalScreen(level, sublevel, layout[x][y] & 0x0F)
+                entsc[x][y] = js[cat]
+    
+    packets = []
+    screenPacketOffset = dict() # (x, y) -> packetoffset
+    enterablekeys = dict() # (x, y) -> packet index
+            
+    # floodfill from enterable coords~
+    for xe, ye in enterableCoords:
+        seckey = (xe, ye)
+        if processed[xe][ye] is not None:
+            enterablekeys[seckey] = enterablekeys[processed[xe][ye]]
+        else:
+            condensed = (layout[xe][ye] >> 4) == 0xB
+            entsize = 4 if condensed else 6
+            # FIXME: should we sort these, or take them in order?
+            # only matters if the room wraps around the 16x16 sublevel layout square
+            roomcoords = floodfillFindContinuousRoom(layout, xe, ye, vertical)
+            packet = JSONDict({
+                "condensed": condensed,
+                "data": []
+            })
+            for x, y in roomcoords:
+                processed[x][y] = seckey
+                # screenPacketOffset[(x, y)] = len(packet.data) # tempting, but wrong apparently.
+                # This is weird, but it works?
+                screenPacketOffset[(x, y)] = max(len(packet.data) - entsize, 0) if len(entsc[x][y]) == 0 else len(packet.data)
+                # add to data
+                for ent in entsc[x][y]:
+                    data = getDataForEnt(x, y, vertical, condensed, ent)
+                    assert len(data) == entsize
+                    packet.data.extend(data)
+            
+            # reuse previous packet if identical to this one
+            for i, prevpacket in enumerate(packets):
+                if prevpacket.data == packet.data and prevpacket.condensed == packet.condensed:
+                    enterablekeys[seckey] = i
+                    break
+            else:
+                # new packet!
+                enterablekeys[seckey] = len(packets)
+                packets.append(packet)
+    
+    # sort packets so that the non-empty non-condensed packets come first
+    def getPacketPriority(i):
+        packet = packets[i]
+        if len(packet.data) == 0:
+            return 2
+        elif packet.condensed:
+            return 1
+        else:
+            return 0
+            
+    remapPacketsIndices = sorted(list(range(len(packets))), key=getPacketPriority) # (new packet index) -> (old packet index)
+    remapPackets = [remapPacketsIndices.index(i) for i in range(len(packets))] # (old packet index) -> (new packet index)
+    packets = [packets[remapPacketsIndices[i]] for i in range(len(packets))]
+    
+    for seckey, packetidx in enterablekeys.items():
+        enterablekeys[seckey] = remapPackets[packetidx]
+    
+    # okay, now let's write these packets to data
+    data = []
+    packetStartByIdx = dict()
+    packetEndByIdx = dict()
+    
+    if len(packets) == 0:
+        return data
+        
+    startWithTerm = any([len(packet.data) == 0 for packet in packets])
+    
+    for i, packet in enumerate(packets):
+        if len(packet.data) == 0:
+            # we'll come back to this
+            # reuse previous idx
+            assert startWithTerm
+            packetStartByIdx[i] = 0
+            packetEndByIdx[i] = 0
+        else:
+            if len(data) > 0 or packet.condensed or startWithTerm:
+                data.append(0xFE if packet.condensed else 0xFF)
+            packetStartByIdx[i] = len(data)
+            data.extend(packet.data)
+            packetEndByIdx[i] = len(data)
+    
+    data.append(0xFD)
+    
+    # now let's record the start and end addresses for each enterable room
+    for x, y in enterableCoords:
+        uscreen = layout[x][y] & 0x0F
+        key = (level, sublevel, cat, uscreen)
+        if key in ctx.enterableScreenData:
+            # we previously guaranteed that any time this happens, it's okay
+            if layout[x][y] & 0xF0 == 0xB0: # but we only *expect* it to happen at 0xB0 rooms still, because that's all we checked for before...
+                continue
+            s, js = ctx.getUniqueScreenOriginalScreen(level, sublevel, uscreen)
+            raise Exception(f"{rom.LEVELS[level]}-{sublevel+1}: Same enterable room (screen {s:X}/u={uscreen:X}) appears twice in two enterable-screen contexts; second time at ({x},{y})")
+        seckey = (x, y)
+        assert seckey in enterablekeys
+        i = enterablekeys[seckey]
+        offset = screenPacketOffset[(x, y)]
+        condensed = layout[x][y] >> 4 == 0xB
+        entsize = 4 if condensed else 6
+        assert packets[i].condensed == condensed
+        assert (packetEndByIdx[i] - packetStartByIdx[i]) % entsize == 0
+        assert len(packets[i].data) % entsize == 0
+        assert len(packets[i].data) == (packetEndByIdx[i] - packetStartByIdx[i])
+        
+        ctx.enterableScreenData[key] = JSONDict({
+            "secaddr": packetStartByIdx[i] + addr,
+            "eaddr": packetStartByIdx[i] + offset + addr,
+            "endaddr": packetEndByIdx[i] + addr,
+            "entsToLoad": len(entsc[x][y]), # entities on this scren
+            "seclength": packetEndByIdx[i] - packetStartByIdx[i],
+            "secstart": packetStartByIdx[i],
+            "eoffset": packetStartByIdx[i] + offset,
+            "condensed": condensed,
+            "ex": x,
+            "ey": y,
+            "entcat": cat
+        })
+    
+    return data
+
+def produceEntityLookupPackets(ctx: SaveContext, level, sublevel, addr):
+    # get number of priority rooms
+    numPriorityUniqueScreens = ctx.numPriorityUniqueScreens[(level, sublevel)]
+    
+    # write pointer table for priority rooms
+    # it's okay to leave the unenterable ones as garbage/0
+    data = [0] * (numPriorityUniqueScreens * 2)
+    # write packets
+    for uscreen in range(numPriorityUniqueScreens):
+        keys = []
+        for i, cat in enumerate(CATS):
+            keys.append((level, sublevel, cat, uscreen))
+        if any([key in ctx.enterableScreenData for key in keys]):
+            word = len(data) + addr
+            data[uscreen*2] = word & 0xFF
+            data[uscreen*2 + 1] = word >> 8
+            for i, key in enumerate(keys):
+                cat = CATS[i]
+                edata = ctx.enterableScreenData[key]
+                if edata.seclength == 0:
+                    data.append(0x80)
+                else:
+                    data.append(edata.entsToLoad)
+                    data.append(edata.eoffset)
+                    data.append(edata.eaddr & 0xFF)
+                    data.append(edata.eaddr >> 8)
+
+    return data
+
+def writeChunks(ctx: SaveContext):
+    tbank = ctx.regions.ChunkTable.bank
+    taddr = ctx.regions.ChunkTable.addr
+    addr = ctx.regions.ChunkValues.addr
+    bank = ctx.regions.ChunkValues.bank
+    
+    addr = rom.TILES4x4_BEGIN + 0x10
+    addrs = []
+    for level, jl in enumerate(ctx.j.levels):
+        if level == 0:
+            taddr += 2
+            addrs.append(0)
+        else:
+            if "chunks" in jl:
+                ctx.writeWord(tbank, taddr, addr)
+                addrs.append(addr)
+                taddr += 2
+                for chunk in jl.chunks[1:]:
+                    for t in chunk:
+                        ctx.writeByte(bank, addr, t)
+                        addr += 1
+            else:
+                addrs.append(0)
+                assert "chunklink" in jl
+                ctx.writeWord(bank, taddr, addrs[jl.chunklink])
+    
+    ctx.regions.ChunkTable.used = taddr - ctx.regions.ChunkTable.addr
+    ctx.regions.ChunkValues.used = addr - ctx.regions.ChunkValues.addr
+
+def writeEntities(ctx: SaveContext):
+    for cat in CATS:
+        region = ctx.regions[f"Ent{cat}"]
+        addr = region.addr
+        bank = region.bank
+        addr = writeSublevelTableData(ctx, addr, bank, lambda ctx, level, sublevel, addr: produceEntityPackets(ctx, level, sublevel, cat, addr))
+        region.used = addr - region.addr
+    
+    addr = ctx.regions.EntLookup.addr
+    bank = ctx.regions.EntLookup.bank
+    addr = writeSublevelTableData(ctx, addr, bank, produceEntityLookupPackets)
+    ctx.regions.EntLookup.used = addr -  ctx.regions.EntLookup.addr

@@ -12,6 +12,10 @@ from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMe
 from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint
 import functools
 import copy
+import signal
+
+# allows PyQt to close with ctrl+C
+signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 def plural(i, singular, plural=None):
     if plural is None:
@@ -162,12 +166,28 @@ def paintTile(painter, vram, x, y, tileidx, scale):
     f = math.floor
     painter.drawImage(QRect(f(x), f(y), f(x2 - x + 1), f(y2 - y + 1)), img)
 
+class NonScrollableComboBox(QComboBox):
+    def wheelEvent(self, *args, **kwargs):
+        return
+
 class HotkeySpinBox(QSpinBox):
     def __init__(self, app):
         super().__init__()
         self.app = app
         # Install an event filter on the spin box
         self.installEventFilter(self)
+        
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                newvalue = min(self.value() + 8, self.maximum())
+            else:
+                newvalue = max(self.value() - 8, self.minimum())
+            if newvalue != self.value():
+                self.setValue(newvalue)
+        else:
+            super().wheelEvent(event)
     
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyRelease:
@@ -909,7 +929,7 @@ class MainWindow(QMainWindow):
         
         cvlay = QVBoxLayout()
         
-        self.entityIDDropdown = QComboBox()
+        self.entityIDDropdown = NonScrollableComboBox()
         for i in range(1,0x80):
             name = rom.getEntityName(i)
             self.entityIDDropdown.addItem(name)
@@ -921,6 +941,10 @@ class MainWindow(QMainWindow):
         self.entityCategoryButtonGroup, self.entityCategoryButtons, cvhlay = self.addRadioButtons(*CATS, cb=on_button_clicked)
         cvlay.addLayout(cvhlay)
         
+        self.entitySlotBox, cvhlay = self.addSpinBoxWithLabel("slot: ", 0, 7)
+        self.entitySlotBox.valueChanged.connect(functools.partial(self.setEntityProp, "slot"))
+        self.entityRamAddrLabel = cvhlay.itemAt(0).widget()
+        cvlay.addLayout(cvhlay)
         self.entityXBox, cvhlay = self.addSpinBoxWithLabel("x: ", 0, 0x9F)
         self.entityXBox.valueChanged.connect(functools.partial(self.setEntityProp, "x"))
         cvlay.addLayout(cvhlay)
@@ -931,7 +955,7 @@ class MainWindow(QMainWindow):
         self.entityMarginBox.valueChanged.connect(functools.partial(self.setEntityProp, "margin"))
         cvlay.addLayout(cvhlay)
         
-        self.entpropwidgets = [self.entityIDDropdown, self.entityXBox, self.entityYBox, self.entityMarginBox, self.entityCategoryButtonGroup, *self.entityCategoryButtons]
+        self.entpropwidgets = [self.entityIDDropdown, self.entitySlotBox, self.entityXBox, self.entityYBox, self.entityMarginBox, self.entityCategoryButtonGroup, *self.entityCategoryButtons]
         
         self.entitySelector = QListWidget(self)
         self.entitySelector.setMaximumWidth(240)
@@ -1066,7 +1090,6 @@ class MainWindow(QMainWindow):
             cat, i = selectedEntity
             prev = self.j.levels[level].sublevels[sublevel].screens[screen][cat][i][prop]
             if prev != value:
-                    
                 self.undoBuffer.push(
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, value),
                     lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen][cat][i], prop, prev),
@@ -1077,25 +1100,29 @@ class MainWindow(QMainWindow):
     
     def setEntityCategory(self, cat):
         level, sublevel, screen = self.getLevel()
+        jl, jsl, js = self.getLevelJ()
         selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
         if selectedEntity is not None:
             prevcat, i = selectedEntity
-            if prevcat != cat:                
-                def moveCat(_src, _dst, _srcidx, _dstidx, app):
+            if prevcat != cat:
+                prevslot = js[prevcat][i].slot
+                
+                def moveCat(_src, _dst, _srcidx, _dstidx, slot, app):
                     jl, jsl, js = app.getLevelJ()
                     if _srcidx is None:
-                        _srcidx = len(js[_src]-1)
+                        _srcidx = len(js[_src])-1
                     if _dstidx is None:
                         _dstidx = len(js[_dst])
                     ent = js[_src][_srcidx]
+                    ent.slot = slot
                     js[_src][_srcidx:_srcidx+1] = []
                     js[_dst].insert(_dstidx, ent)
-                    app.entitySelected[(level, sublevel, screen)] = (cat, len(js[cat])-1)
+                    app.entitySelected[(level, sublevel, screen)] = (_dst, _dstidx)
                     
                 self.undoBuffer.push(
-                    functools.partial(moveCat, prevcat, cat, i, None),
-                    functools.partial(moveCat, cat, prevcat, None, i),
-                    lambda app: app.restoreEntityContext(),
+                    functools.partial(moveCat, prevcat, cat, i, None, prevslot % rom.SLOTCOUNT[CATS.index(cat)]),
+                    functools.partial(moveCat, cat, prevcat, None, i, prevslot),
+                    lambda app: app.restoreEntityContext(level, sublevel, screen),
                     lambda app: app.updateScreenEntityList()
                 )
                 self.updateScreenEntityList()
@@ -1151,6 +1178,7 @@ class MainWindow(QMainWindow):
     def updateScreenEntityList(self):
         jl, jsl, js = self.getLevelJ()
         level, sublevel, screen = self.getLevel()
+        self.entityRamAddrLabel.setText("slot:")
         selectedEntity = self.entitySelected.get((level, sublevel, screen), None)
         if self.entitySelector is not None:
             self.entitySelector.blockSignals(True)
@@ -1161,7 +1189,7 @@ class MainWindow(QMainWindow):
             selector = self.entitySelector
             self.entitySelectorWidgetIDMap = {}
             selector.clear()
-            for cat in CATS:
+            for icat, cat in enumerate(CATS):
                 for i, ent in enumerate(js.get(cat, [])):
                     name = rom.getEntityName(ent.type)
                     item = QListWidgetItem(self.catIcons[cat], name)
@@ -1169,10 +1197,14 @@ class MainWindow(QMainWindow):
                     self.entitySelectorWidgetIDMap[id(item)] = (cat, i)
                     if selectedEntity == (cat, i):
                         selector.setCurrentItem(item)
+                        ramaddr = rom.SLOTRAMSTART[icat]+0x100*(ent.slot % rom.SLOTCOUNT[icat])
+                        self.entityRamAddrLabel.setText(f"[${ramaddr:04X}] slot:")
                         if self.sender() not in self.entpropwidgets:
                             for w in self.entpropwidgets:
                                 w.blockSignals(True)
                             self.entityIDDropdown.setCurrentIndex(ent.type-1)
+                            self.entitySlotBox.setValue(ent.slot)
+                            self.entitySlotBox.setMaximum(rom.SLOTCOUNT[icat]-1)
                             self.entityXBox.setValue(ent.x)
                             self.entityYBox.setValue(ent.y)
                             for button in self.entityCategoryButtons:
@@ -1184,7 +1216,6 @@ class MainWindow(QMainWindow):
                             for w in self.entpropwidgets:
                                 w.blockSignals(False)
             self.entitySelector.blockSignals(False)
-        
         for screenGrid in self.screenGrids:
             screenGrid.update()
     
@@ -1233,8 +1264,14 @@ class MainWindow(QMainWindow):
                     text += " (unused)"
                 else:
                     text += f"\n{len(uses)} {plural(len(uses), 'appearance')}"
-                    if not (set([level]) >= set(levelsused)):
-                        text += f"\n...including appearances in other levels as a glitch chunk"
+                    if not (set([(level,)]) >= set(levelsused)):
+                        text += f"\n...including appearances in other levels as a glitch chunk!"
+                    if len(uses) < 20:
+                        for use in uses:
+                            use_level, use_sublevel, use_screen, (use_x, use_y) = use
+                            text += f"\n-> {rom.LEVELS[use_level]}-{use_sublevel+1} ${use_screen:X} at x={use_x}, y={use_y}"
+                    else:
+                        text += "\n(Too many appearances to list)"
         
         addTile = False
         if self.chunkEdit.hoverPos is not None:
@@ -1242,10 +1279,10 @@ class MainWindow(QMainWindow):
             chunk = self.chunkEdit.getChunk()
             if chunk is not None:
                 tidx = chunk[x + y * 4]
-                text += f"\nTile ${tidx:04X}"
+                text = f"Tile ${tidx:04X}\n" + text
                 addTile = True
         if not addTile:
-            text += f"\nTile $- - - -"
+            text = f"Tile $- - - -\n" + text
         
         self.chunkEditLabel.setText(text)
         self.chunkEditLabel.update()
@@ -1419,6 +1456,7 @@ class MainWindow(QMainWindow):
         if target == "rom":
             print("Exporting rom...")
             regions, errors = model.saveRom(self.rom, self.j, "hack.gb")
+            print("Done.")
             for error in errors:
                 print(error)
         pass

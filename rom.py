@@ -53,8 +53,8 @@ def produce_sublevel_screen_arrangement(level, sublevel):
                 return startx, starty, scrolldir, buff
             elif header == 0xfe:
                 break
-            assert x >= 0 and x < 0x10, f"{x},{y},{LEVELS[level]}-{sublevel} :{startx},{starty} +{xstride}x"
-            assert y >= 0 and y < 0x10, f"{x},{y},{LEVELS[level]}-{sublevel} :{startx},{starty} +{ystride}y"
+            x %= 0x10
+            y %= 0x10
             buff[x][y] = header
             x += xstride
             y += ystride
@@ -300,6 +300,10 @@ def readrom(_data):
         print("Unrecognized ROM. Please check the hash. Supported roms: us/ue, jp, kgbc4eu")
         sys.exit(1)
 
+    # fixed bank 0
+    global LD_HL_LEVEL_A_SUBLEVEL
+    LD_HL_LEVEL_A_SUBLEVEL = 0x2873
+
     # bank2
     global BANK2
     BANK2 = 2
@@ -383,6 +387,7 @@ def readrom(_data):
         0x10: "ROPESPIKEBALL",
         0x12: "VMOVPLAT",
         0x13: "HMOVPLAT",
+        0x15: "BGANIM_PLANT",
         0x1C: "ENM_SKELETON_1C",
         0x1E: "ENM_FORNEUS",
         0x1F: "ENM_BAT_1F",
@@ -391,7 +396,7 @@ def readrom(_data):
         0x21: "ENM_MUDMAN",
         0x22: "BOSS_TWINTRIDENT",
         0x23: "CRACKBLOCK",
-        0x24: "BG_ANIM",
+        0x24: "BGBLOSSOM",
         0x25: "SPAWNEYE_RIGHT",
         0x26: "SPAWNEYE_LEFT",
         0x2B: "SPIKEWALL",
@@ -446,4 +451,17 @@ ENTPALETTES = [
     (0x5C, 0xCE, 0x98), # misc
     (0xA5, 0x86, 0x14), # enemies
     (0xEE, 0x6F, 0xA4), # items
+]
+
+# per entcat
+SLOTCOUNT = [
+    8,
+    8,
+    4
+]
+
+SLOTRAMSTART = [
+    0xc400,
+    0xCC00,
+    0xD400,
 ]
