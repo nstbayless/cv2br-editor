@@ -76,10 +76,51 @@ def loadRom(path):
                 for sublevel in range(rom.SUBSTAGECOUNT[i]):
                     jsl = JSONDict()
                     jl.sublevels.append(jsl)
+                    loadSublevelInitRoutine(j, i, sublevel)
                     loadSublevelScreens(j, i, sublevel)
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
         return rom.data, j        
+
+def loadSublevelInitRoutine(j, level, sublevel):
+    jsl = j.levels[level].sublevels[sublevel]
+    jsl.initRoutines = []
+    r = jsl.initRoutines
+    bank = rom.BANK
+    addr = readtableword(bank, rom.VRAM_SPECIAL_ROUTINES, level, sublevel)
+    while True:
+        assert len(r) <= 10
+        if rom.readbyte(bank, addr) == 0xC9: # ret
+            return
+        elif rom.readword(bank, addr + 1) == rom.UNK_254:
+            r.append(JSONDict({"type": "UNK254"}))
+            addr += 8
+        elif rom.readword(bank, addr + 1) == rom.UNK_7001:
+            # length of this one depends on rom type
+            # too complicated, but it's only ever alone like so,
+            # so we just call it here.
+            r.append(JSONDict({"type": "UNK7001"}))
+            return
+        elif rom.readbyte(bank, addr+1) == 0x20:
+            r.append(JSONDict({"type": "CNTEFFECT", "effect": 0x0f, "scanline": 0x10}))
+            addr += 11
+            if rom.readbyte(bank, addr-3) == 0xC3: # jp
+                break
+        elif rom.readbyte(bank, addr) == 0x11:
+            de = rom.readword(bank, addr+1)
+            hl = rom.readword(bank, addr+1+3)
+            bc = rom.readword(bank, addr+1+6)
+            assert type(bc) == int
+            
+            assert hl == rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
+            
+            screendata = [rom.readbyte(rom.BANK6, de+i) for i in range(20)]
+            
+            r.append(JSONDict({"type": "SCREEN", "dstAddr": bc, "data": screendata}))
+            
+            addr += 3*4
+            if rom.readbyte(bank, addr-3) == 0xC3: # jp
+                break
 
 def loadSublevelScreens(j, level, sublevel):
     tiles_start_addr = readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, level, sublevel)
@@ -357,7 +398,7 @@ class SaveContext:
         self.errors = []
         self.regions = JSONDict({
             "ScreenTilesTable": {
-                "shortname": "STT",
+                "shortname": "ST",
                 "max": 0x4316 - 0x42C4,
                 "addr": rom.LEVTAB_TILES_BANK2,
                 "bank": rom.BANK2,
@@ -365,7 +406,7 @@ class SaveContext:
             # could combine this with the above, which ends at the same spot
             # we just need to adjust calls to the routine at $4316
             "SublevelVertical": {
-                "shortname": "SLV",
+                "shortname": "SV",
                 "max":  0x4339 - 0x4316,
                 "addr": rom.LEVEL_SCROLLDIR_TABLE-10, # routine before this table is 10 bytes, and we rewrite it.
                 "bank": rom.BANK2,
@@ -407,8 +448,14 @@ class SaveContext:
                 "addr": rom.SCREEN_ENT_TABLE,
                 "bank": rom.BANK3,
             },
+            "SublevelInitRoutines": {
+                "shortname": "SI",
+                "max": rom.VRAM_SPECIAL_ROUTINES_END - rom.VRAM_SPECIAL_ROUTINES,
+                "addr": rom.VRAM_SPECIAL_ROUTINES,
+                "bank": rom.BANK3,
+            },
             "ScreenTiles": {
-                "shortname": "ST",
+                "shortname": "ZT",
                 "max": 0x73F8 - 0x62B4 + 20 * 5,
                 "addr": j.screenTilesAddr,
                 "bank": rom.BANK6,
@@ -436,6 +483,8 @@ class SaveContext:
         
         # maps (level, sublevel, cat, uscreen) -> 
         self.enterableScreenData = dict()
+        
+        self.sublevelInitSubroutines = dict()
     
     # returns screen, js
     def getUniqueScreenOriginalScreen(self, level, sublevel, uscreen):
@@ -461,6 +510,16 @@ class SaveContext:
         else:
             self.writeByte(bank, addr, v >> 8)
             self.writeByte(bank, addr+1, v & 0xff)
+    
+    def readByte(self, bank, addr):
+        return self.gb[self.romaddr(bank, addr)]
+    
+    def readWord(self, bank, addr, littleEndian=True):
+        if littleEndian:
+            return self.readByte(bank, addr) | (self.readByte(bank, addr+1) << 8)
+        else:
+            return self.readByte(bank, addr+1) | (self.readByte(bank, addr) << 8)
+    
         
 # returns:
 #  - a list of (regionname, size, maxsize)
@@ -503,6 +562,12 @@ def writeRom(ctx: SaveContext):
     writeSublevelVertical(ctx)
     writeEntities(ctx)
     writeChunks(ctx)
+    
+    # this one reads some of the screenTiles from before
+    writeSublevelInitRoutines(ctx)
+    
+    # do this one last, it's an opportunist
+    writeLoadEnclosedScreenEntityBugfixPatch(ctx)
     
 def constructScreenRemapping(ctx: SaveContext):
     for i, jl in enumerate(ctx.j.levels):
@@ -663,7 +728,7 @@ def writeScreenTiles(ctx: SaveContext):
                             ctx.writeByte(bank, addr, js.data[y][x])
                             addr += 1
     ctx.regions.ScreenTilesTable.used = tsaddr - ctx.regions.ScreenTilesTable.addr
-    ctx.regions.ScreenTiles.addr = addr - ctx.regions.ScreenTiles.addr
+    ctx.regions.ScreenTiles.used = addr - ctx.regions.ScreenTiles.addr
 
 # gives a (massive) over-approximation in cover sets for this sublevel
 def constructScreenCoverSets(ctx: SaveContext, level, sublevel):
@@ -826,38 +891,52 @@ def writeScreenLayout(ctx: SaveContext):
     addr = writeSublevelTableData(ctx, addr, bank, produceScreenLayoutPackets)
     ctx.regions.Layouts.used = addr - ctx.regions.Layouts.addr
 
-def writeLevelTableData(ctx: SaveContext, addr, bank, cb):
-    taddr = addr
-    addr += 8*2
-    for level, jl in enumerate(ctx.j.levels):
-        taddr += 2
-        if level == 0:
-            taddr += 2
-        else:
-            ctx.writeWord(bank, taddr, addr)
-            hunk = cb(ctx, level, addr)
-            for b in hunk:
-                ctx.writeByte(bank, addr, b)
-                addr += 1
-    
-    return addr
+def rrange(a, b):
+    return range(b-1,a-1,-1)
 
-def writeSublevelTableData(ctx: SaveContext, addr, bank, cb):
+def writeSublevelTableData(ctx: SaveContext, addr, bank, cb, tableAtStart=False, allowMerging=False):
     taddr = addr
     addr += 8*2
+    
+    if tableAtStart:
+        tsaddr = addr
+        addr += 2*sum(len(jl.sublevels) for jl in ctx.j.levels[1:])
+    
+    orgaddr = addr
     
     for level, jl in enumerate(ctx.j.levels):
         if level == 0:
             taddr += 2
         else:
-            tsaddr = addr
+            if not tableAtStart:
+                tsaddr = addr
+                addr += len(jl.sublevels) * 2
             ctx.writeWord(bank, taddr, tsaddr)
             taddr += 2
-            addr += len(jl.sublevels) * 2
             for sublevel, jsl in enumerate(jl.sublevels):
                 ctx.writeWord(bank, tsaddr, addr)
+                rv = cb(ctx, level, sublevel, addr)
+                replaceAddr = None
+                if type(rv) is tuple:
+                    hunk, replaceaddr = rv
+                    if replaceaddr is not None:
+                        ctx.writeWord(bank, tsaddr, replaceaddr)
+                else:
+                    hunk = rv
+                if replaceAddr is None and allowMerging and len(hunk) > 0:
+                    hunk0 = hunk[0]
+                    mergeAddr = None
+                    lhunk = len(hunk)
+                    for iaddr in rrange(orgaddr, addr - lhunk+1):
+                        if hunk0 == ctx.readByte(bank, iaddr):
+                            if hunk == [ctx.readByte(bank, iaddr + i) for i in range(lhunk)]:
+                                mergeAddr = iaddr
+                                break
+                    if mergeAddr is not None:
+                        ctx.writeWord(bank, tsaddr, mergeAddr)
+                        tsaddr += 2
+                        continue
                 tsaddr += 2
-                hunk = cb(ctx, level, sublevel, addr)
                 for b in hunk:
                     ctx.writeByte(bank, addr, b)
                     addr += 1
@@ -1115,6 +1194,7 @@ def produceEntityPackets(ctx: SaveContext, level, sublevel, cat, addr):
             "secstart": packetStartByIdx[i],
             "eoffset": packetStartByIdx[i] + offset,
             "condensed": condensed,
+            "entsize": entsize,
             "ex": x,
             "ey": y,
             "entcat": cat
@@ -1145,7 +1225,14 @@ def produceEntityLookupPackets(ctx: SaveContext, level, sublevel, addr):
                     data.append(0x80)
                 else:
                     data.append(edata.entsToLoad)
-                    data.append(edata.eoffset)
+                    
+                    # this field is troublesome, and doesn't seem entirely consistent
+                    # not sure exactly what it should be, but if it's left as just `edata.eoffset`
+                    # it causes some wall meats to not spawn, like the one in cloud-2
+                    if edata.condensed:
+                        data.append(edata.eoffset + edata.entsize * edata.entsToLoad)
+                    else:
+                        data.append(edata.eoffset)
                     data.append(edata.eaddr & 0xFF)
                     data.append(edata.eaddr >> 8)
 
@@ -1192,3 +1279,263 @@ def writeEntities(ctx: SaveContext):
     bank = ctx.regions.EntLookup.bank
     addr = writeSublevelTableData(ctx, addr, bank, produceEntityLookupPackets)
     ctx.regions.EntLookup.used = addr -  ctx.regions.EntLookup.addr
+
+def debugWriteBytes(path, b):
+    with open(path, "wb") as f:
+        f.write(bytes(b))
+
+def writeSublevelInitRoutines(ctx: SaveContext):
+    region = ctx.regions.SublevelInitRoutines
+    addr = region.addr
+    bank = region.bank
+    addr = writeSublevelTableData(ctx, addr, bank, produceSublevelInitRoutine, True, True)
+    region.used = addr - ctx.regions.SublevelInitRoutines.addr
+    
+    debugWriteBytes("debugout.bin", [ctx.readByte(bank, i) for i in range(region.addr, region.addr + region.used)])
+
+def word(w, littleEndian=True):
+    if littleEndian:
+        return [w & 0xff, w >> 8]
+    else:
+        return [w >> 8, w & 0xff]
+
+def makeSubroutineUNK254(ctx, hunk, addr):
+    if "UNK254" in ctx.sublevelInitSubroutines:
+        return hunk, addr
+    
+    data = [
+        # OPTIMIZE: can probably save a byte here by reordering this to a tail-call
+        0xCD, *word(rom.UNK_254), # call UNK254
+        0x3E, 0x09, # ld a, $9
+        0xEA, *word(0xCACF), # ld ($CACF), a
+        0xC9, # ret
+    ]
+    
+    ctx.sublevelInitSubroutines["UNK254"] = addr
+    return hunk + data, addr + len(data)
+
+def makeSubroutineLoadScreen(ctx, hunk, addr):
+    if "SRLS" in ctx.sublevelInitSubroutines:
+        return hunk, addr
+    
+    # old-style
+    data = [
+        0xE1, #pop hl
+        0x01, *word(6), #ld bc, $0006
+        0x09, #add hl, bc
+        0xe5, #push hl
+        
+        # OPTIMIZE: check if some of these loads already exist in the ROM.
+        0x32, # ld a, (hl-)
+        0x4F, # ld c, a
+        0x32, # ld a, (hl-)
+        0x47, # ld b, a
+        0x32, # ld a, (hl-)
+        0x5F, # ld e, a
+        0x32, # ld a, (hl-)
+        0x57, # ld d, a
+        0x32, # ld a, (hl-)
+        0x6F, # ld l, a
+        0x66, # ld h, (hl)
+        0xC3, *word(rom.FARCALL_LOAD_SCREEN_TILES) # jp FARCALL_LOAD_SCREEN_TILES
+    ]
+    
+    # better:
+    data = [
+        0xE1, #pop hl
+        0x2A, # ld a, (hl+)
+        
+        # top:
+        0xF5, # push af
+        
+        # OPTIMIZE: check if some of these loads already exist in the ROM.
+        0x2A, # ld a, (hl+)
+        0x4F, # ld c, a
+        0x2A, # ld a, (hl+)
+        0x47, # ld b, a
+        0x2A, # ld a, (hl+)
+        0x5F, # ld e, a
+        0x2A, # ld a, (hl+)
+        0x57, # ld d, a
+        0x2A, # ld a, (hl+)
+        0xE5, # push hl
+        0x66, # ld h, (hl)
+        0x6F, # ld l, a
+        0xC3, *word(rom.FARCALL_LOAD_SCREEN_TILES), # jp FARCALL_LOAD_SCREEN_TILES
+        0xE1, # pop hl
+        0xF1, # pop af
+        0x3D, # dec a
+        0xC8, # ret z
+        0x23, # inc hl
+        0x23, # inc hl
+        0x18, # jr top
+    ]
+    data.append(0x100 - len(data))
+    
+    ctx.sublevelInitSubroutines["SRLS"] = addr
+    
+    return hunk + data, addr + len(data)
+
+def getKeySubroutineScanlineEffect(effect, scanline):
+    return f"SCEFFECT_{effect:02X}_{scanline:02X}" 
+
+def makeSubroutineScanlineEffect(ctx, hunk, addr, effect, scanline):
+    key = getKeySubroutineScanlineEffect(effect, scanline)
+    if key in ctx.sublevelInitSubroutines:
+        return hunk, addr
+    
+    data = [
+        0x3E, 0x20, # ld a, $20
+        0xEA, *word(0xCA96), # ld ($ca96), a
+        0x01, scanline, effect, # ld bc, <effect><scanline>
+        0xC3, *word(rom.SET_SCANLINE_EFFECT), # jp SET_SCANLINE_EFFECT
+    ]
+    
+    ctx.sublevelInitSubroutines[key] = addr
+    return hunk + data, addr + len(data)
+
+def produceSublevelInitRoutine(ctx, level, sublevel, addr):
+    # this is quite spaghetti.
+    jl = ctx.j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    hunk = []
+    orgaddr = addr
+    
+    # make any necessary subroutines
+    for routine in jsl.initRoutines:
+        if routine.type == "UNK254":
+            hunk, addr = makeSubroutineUNK254(ctx, hunk, addr)
+        elif routine.type == "CNTEFFECT":
+            hunk, addr = makeSubroutineScanlineEffect(ctx, hunk, addr, routine.effect, routine.scanline)
+        elif routine.type == "SCREEN":
+            hunk, addr = makeSubroutineLoadScreen(ctx, hunk, addr)
+    
+    if len(jsl.initRoutines) == 0:
+        # special case -- return
+        return hunk, rom.RET_BANK_0
+    
+    if len(jsl.initRoutines) == 1:
+        routine = jsl.initRoutines[0]
+        if routine.type == "UNK254":
+            return hunk, ctx.sublevelInitSubroutines["UNK254"]
+        elif routine.type == "CNTEFFECT":
+            return hunk, ctx.sublevelInitSubroutines[getKeySubroutineScanlineEffect(routine.effect, routine.scanline)]
+    
+    returned = [False]
+    modaddr = addr != orgaddr
+    
+    for i, routine in enumerate(jsl.initRoutines):
+        def getRetOrCallOpcode():
+            if routine is jsl.initRoutines[-1]:
+                returned[0] = True
+                return 0xC3
+            else:
+                return 0xCD
+        if routine.type == "UNK254":
+            # call subroutine
+            hunk += [
+                getRetOrCallOpcode(), *word(ctx.sublevelInitSubroutines["UNK254"])
+            ]
+        elif routine.type == "CNTEFFECT":
+            hunk += [
+                getRetOrCallOpcode(), *word(ctx.sublevelInitSubroutines[getKeySubroutineScanlineEffect(routine.effect, routine.scanline)])
+            ]
+        elif routine.type == "UNK7001":
+            hunk += [
+                0xCD, *word(rom.UNK_7001)
+            ]
+            if rom.UNK_7E5A_BANK == rom.BANK3:
+                hunk += [
+                    getRetOrCallOpcode(), *word(rom.UNK_7E5A)
+                ]
+            else:
+                assert rom.BANKSWAP_ARBITRARY is not None
+                hunk += [
+                    0x0E, rom.UNK_7E5A_BANK, # ldc, bank
+                    0x21, *word(rom.UNK_7E5A), # ld hl, addr
+                    getRetOrCallOpcode(), *word(rom.BANKSWAP_ARBITRARY)
+                ]
+        elif routine.type == "SCREEN":
+            hl = ctx.readWord(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2 + 2*level)
+            count = len(jsl.initRoutines[i:])
+            if "SRLS" in ctx.sublevelInitSubroutines and all([routine.type == "SCREEN" for routine in jsl.initRoutines[i:]]) and count < 0x100:
+                hunk += [0xCD, *word(ctx.sublevelInitSubroutines["SRLS"])]
+                hunk += [count]
+                for scroutine in jsl.initRoutines[i:]:
+                    bc = scroutine.dstAddr
+                    de = getAddressForScreenOrAddScreen(ctx, scroutine.data)
+                    hunk += word()
+                if modaddr:
+                    return hunk, addr
+                else:
+                    return hunk
+            else:
+                bc = routine.dstAddr
+                de = getAddressForScreenOrAddScreen(ctx, routine.data)
+                hunk += [
+                    0x01, *word(bc), # ld bc, ...
+                    0x11, *word(de), # ld de, ...
+                    0x21, *word(hl), # ld hl, ...
+                    getRetOrCallOpcode(), *word(rom.FARCALL_LOAD_SCREEN_TILES)
+                ]
+    
+    # return
+    if not returned[0]:
+        hunk += [0xC9]
+    assert len(hunk) > 0
+    if modaddr:
+        return hunk, addr
+    else:
+        return hunk
+            
+def getAddressForScreenOrAddScreen(ctx: SaveContext, data):
+    region = ctx.regions.ScreenTiles
+    bank = region.bank
+    addr = region.addr
+    dc = len(data)
+    zdata = data[0]
+    z2data = data[1]
+    for startaddr in range(addr, addr + region.used-len(data)):
+        if ctx.readByte(bank, startaddr) == zdata:
+            if ctx.readByte(bank, startaddr+1) == z2data:
+                if [ctx.readByte(bank, startaddr+i) for i in range(dc)] == data:
+                    return startaddr
+    else:
+        if region.max - region.used < dc:
+            raise Exception("Need to insert extra screen, but not enough room in screen bank.")
+        else:
+            addr = region.addr + region.used
+            for i, d in enumerate(data):
+                ctx.writeByte(bank, i + addr, d)
+            region.used += dc
+            return addr
+
+def writeLoadEnclosedScreenEntityBugfixPatch(ctx: SaveContext):
+    # somehow, this routine seems bugged
+    # it's supposed add 6 to hl, not 4
+    # we correct for it by subtracting 2
+    # just need to find some free space to jump to.
+    
+    for name, region in ctx.regions.items():
+        if region.bank == rom.BANK3 and region.max - region.used > 5:
+            addr = region.addr + region.used
+            detour_from = rom.BSCREEN_BUGFIX_DETOUR+1
+            detour_to = ctx.readWord(rom.BANK3, rom.BSCREEN_BUGFIX_DETOUR+1)
+            ctx.writeWord(rom.BANK3, detour_from, addr)
+            
+            print(f"Bugfix patch; detour from ${detour_from:04X} to ${detour_to:04X} tramp ${addr:04X}")
+            
+            data = [
+                0x2b, # dec hl
+                0x2b, # dec hl
+                0xc3, (detour_to & 0xFF), (detour_to >> 8) # jp detour_to
+            ]
+            for b in data:
+                ctx.writeByte(rom.BANK3, addr, b)
+                addr += 1
+            
+            region.used += 5
+            return
+    else:
+        ctx.errors += [f"Unable to find enough room in bank ${rom.BANK3:X} to fix enclosed-screen entity loading routine bug."]
+    

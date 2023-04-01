@@ -303,6 +303,22 @@ def readrom(_data):
     # fixed bank 0
     global LD_HL_LEVEL_A_SUBLEVEL
     LD_HL_LEVEL_A_SUBLEVEL = 0x2873
+    global RET_BANK_0
+    global UNK_254
+    global UNK_7001
+    global UNK_7E5A
+    global UNK_7E5A_BANK
+    global SET_SCANLINE_EFFECT
+    global FARCALL_LOAD_SCREEN_TILES
+    global BANKSWAP_ARBITRARY
+    BANKSWAP_ARBITRARY = None
+    RET_BANK_0 = 0x000F # just any ol' ret will do
+    UNK_254 = 0x0254
+    UNK_7001 = 0x7001
+    UNK_7E5A = 0x7E5A
+    UNK_7E5A_BANK = 3
+    FARCALL_LOAD_SCREEN_TILES = 0x01d9
+    SET_SCANLINE_EFFECT = 0x283b
 
     # bank2
     global BANK2
@@ -331,6 +347,12 @@ def readrom(_data):
     LEVTAB_ROUTINE = 0x6cc7
     global SCREEN_ENT_TABLE
     SCREEN_ENT_TABLE = 0x62c1
+    global BSCREEN_BUGFIX_DETOUR
+    BSCREEN_BUGFIX_DETOUR = 0x6b90 # start of jp instruction
+    global VRAM_SPECIAL_ROUTINES
+    global VRAM_SPECIAL_ROUTINES_END
+    VRAM_SPECIAL_ROUTINES=0x768e
+    VRAM_SPECIAL_ROUTINES_END=0x7768
 
     # bank6
     global BANK6
@@ -340,6 +362,7 @@ def readrom(_data):
     
     if ROMTYPE == "jp":
         LEVEL_SCREEN_TABLE = 0x4fb0
+        BSCREEN_BUGFIX_DETOUR = 0x6a54
 
     if ROMTYPE == "kgbc4eu":
         BANK2 = 0x12
@@ -356,6 +379,17 @@ def readrom(_data):
         LEVEL_TILESET_COMMON = 0x5a33
         LEVEL_SCREEN_TABLE = 0x50C8
         SCREEN_ENT_TABLE = 0x66aa
+        BSCREEN_BUGFIX_DETOUR = 0x6e39
+        VRAM_SPECIAL_ROUTINES = 0x7b88
+        VRAM_SPECIAL_ROUTINES_END=0x7C68
+        RET_BANK_0 = 0x001E
+        UNK_254 = 0x100D
+        UNK_7001 = 0x7409
+        UNK_7E5A = 0x7E8C
+        UNK_7E5A_BANK = 0x18
+        SET_SCANLINE_EFFECT = 0x1607
+        FARCALL_LOAD_SCREEN_TILES = 0x0fa3
+        BANKSWAP_ARBITRARY = 0x109a
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
@@ -380,8 +414,8 @@ def readrom(_data):
         0x09: "ENM_RAT_09",
         
         0x0B: "WALL_MEAT",
-        0x0C: "ENM_PANAGUCHI_0C",
-        0x0D: "ENM_PANAGUCHI_0D",
+        0x0C: "ENM_PUNAGUCHI_0C",
+        0x0D: "ENM_PUNAGUCHI_0D",
         0x0E: "ENM_RAT_0E",
         
         0x10: "ROPESPIKEBALL",
@@ -414,7 +448,7 @@ def readrom(_data):
         0x43: "LOOSEPULLEY_43",
         0x44: "LOOSEPULLEY_44",
         0x45: "BOSS_DARKSIDE",
-        0x48: "ENM_PANAGUCHI_VMOV",
+        0x48: "ENM_PUNAGUCHI_VMOV",
         0x4A: "SPIKEFLOOR",
         0x4B: "PULLEY",
         0x4E: "BGFLAME",
@@ -425,6 +459,7 @@ def readrom(_data):
         0x58: "EXTRUDER_CTRL",
         0x5B: "ENM_NIGHTSTALKER",
         0x5D: "ENM_BEATLE",
+        0x5F: "BGANIM_CLOUD",
         
         0x60: "BOSS_IRON_DOLL",
         

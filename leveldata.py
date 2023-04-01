@@ -367,9 +367,13 @@ endm
                         mapEntTableAddrToLabel[address] = mapEntTableAddrToLabel.get(address, []) + [label]
                         if entslist_begin + offset != address:
                             strange=True #print(f"strangeness. {level} {sublevel} {screen} {catnames[entcat]}: {entslist_begin:04X} + {offset:02X} != {address:04X}")
-                            writese2(f"    db ${offset:02X} ; offset{' (seems incongruent with address?)' if strange else ''}")
+                            diff = offset - (address - entslist_begin)
+                            if diff > 0:
+                                writese2(f"    db {label} - Lvl{level}_{sublevel}_{catnames[entcat]} + ${diff:X} ; offset (${offset:02X}){' (seems incongruent with address?)' if strange else ''}")
+                            else:
+                                writese2(f"    db {label} - Lvl{level}_{sublevel}_{catnames[entcat]} - ${-diff:X} ; offset (${offset:02X}){' (seems incongruent with address?)' if strange else ''}")
                         else:
-                            writese2(f"    db {label} - Lvl{level}_{sublevel}_{catnames[entcat]} ; offset")
+                            writese2(f"    db {label} - Lvl{level}_{sublevel}_{catnames[entcat]} ; offset (${offset:02X})")
                         writese2(f"    dw {label} ; address")
                     prevaddr = entsaddr
     
