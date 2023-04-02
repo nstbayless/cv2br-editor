@@ -303,6 +303,8 @@ def readrom(_data):
     # fixed bank 0
     global LD_HL_LEVEL_A_SUBLEVEL
     LD_HL_LEVEL_A_SUBLEVEL = 0x2873
+    global LOAD_SUBSTAGE_BYTE_FROM_TABLE
+    LOAD_SUBSTAGE_BYTE_FROM_TABLE = 0x286D
     global RET_BANK_0
     global UNK_254
     global UNK_7001
@@ -319,6 +321,13 @@ def readrom(_data):
     UNK_7E5A_BANK = 3
     FARCALL_LOAD_SCREEN_TILES = 0x01d9
     SET_SCANLINE_EFFECT = 0x283b
+    global ENT4C_FLICKER_ROUTINE
+    global ENT4C_FLICKER_ROUTINE_END
+    global ENT4C_FLICKER_ROUTINE_BANK
+    ENT4C_FLICKER_ROUTINE_BANK = 0
+    ENT4C_FLICKER_ROUTINE = 0x1CE9
+    ENT4C_FLICKER_ROUTINE_END = 0x1D14
+    
 
     # bank2
     global BANK2
@@ -390,6 +399,11 @@ def readrom(_data):
         SET_SCANLINE_EFFECT = 0x1607
         FARCALL_LOAD_SCREEN_TILES = 0x0fa3
         BANKSWAP_ARBITRARY = 0x109a
+        LD_HL_LEVEL_A_SUBLEVEL = 0x1636
+        LOAD_SUBSTAGE_BYTE_FROM_TABLE = 0x1630
+        ENT4C_FLICKER_ROUTINE_BANK = 0x18
+        ENT4C_FLICKER_ROUTINE = 0x6569
+        ENT4C_FLICKER_ROUTINE_END = 0x6594
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
@@ -451,6 +465,7 @@ def readrom(_data):
         0x48: "ENM_PUNAGUCHI_VMOV",
         0x4A: "SPIKEFLOOR",
         0x4B: "PULLEY",
+        0x4C: "BGFLICKER_CLOUD",
         0x4E: "BGFLAME",
         
         0x53: "BOSS_ANGEL_MUMMY",
