@@ -7,9 +7,9 @@ from PySide6.QtWidgets import \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
     QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton, \
-    QCheckBox, QFrame
+    QCheckBox, QFrame, QStyle
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence, QPolygon
-from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint
+from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint, QTimer
 import functools
 import copy
 import signal
@@ -51,11 +51,15 @@ class UAction:
         self.refreshcontext = refreshcontext if refreshcontext is not None else (lambda app: None)
         
 class UndoBuffer:
-    def __init__(self, app):
+    def __init__(self, app, cb=None):
         self.idx = 0
         self.buff = []
         self.app = app
         self.max = 1023
+        if cb:
+            self.cb = cb
+        else:
+            cb = lambda kind: None
     
     def undo(self):
         self.idx -= 1
@@ -66,6 +70,7 @@ class UndoBuffer:
             ua.restorecontext(self.app)
             ua.undo(self.app)
             ua.refreshcontext(self.app)
+        self.cb("undo")
         
     def redo(self):
         self.idx += 1
@@ -76,6 +81,7 @@ class UndoBuffer:
             ua.restorecontext(self.app)
             ua.do(self.app)
             ua.refreshcontext(self.app)
+        self.cb("redo")
     
     def clear(self):
         self.idx = 0
@@ -93,6 +99,7 @@ class UndoBuffer:
             
         self.buff[-1].do(self.app)
         self.buff[-1].refreshcontext(self.app)
+        self.cb("push")
 
 class VRam:
     def __init__(self, j, nes):
@@ -697,7 +704,7 @@ class MainWindow(QMainWindow):
         super(MainWindow, self).__init__()
         self.rom, self.j = model.loadRom("base-us.gb")
         model.addEmptyScreens(self.j)
-        self.undoBuffer = UndoBuffer(self)
+        self.undoBuffer = UndoBuffer(self, self.onUndoBuffer)
         self.vram = VRam(self.j, self.rom)
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
@@ -718,6 +725,8 @@ class MainWindow(QMainWindow):
         self.entityTab = None
         self.entitySelector = None
         self.entpropwidgets = []
+        self.emptyIcon = QIcon()
+        self.errorIcon = QIcon.fromTheme("dialog-error")
         
         # TODO: use pyside6-rcc to build the resources
         self.setWindowIcon(QIcon("etc/icon.png"))
@@ -790,13 +799,14 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.onChangeTab)
         self.setCentralWidget(self.tabs)
         TAB_LABELS = [
-            "Layout", "Screen", "Entities", "Chunks"
+            "Layout", "Screen", "Entities", "Chunks", "Usage"
         ]
         TAB_DEFS = [
             self.defineLevelLayTab,
             self.defineScreenTab,
             self.defineEntityTab,
             self.defineChunksTab,
+            self.defineUsageTab,
         ]
         for i, (label, define) in enumerate(zip(TAB_LABELS, TAB_DEFS)):
             tab = QWidget()
@@ -974,7 +984,47 @@ class MainWindow(QMainWindow):
         cvlay.addLayout(bhlay)
         hlay.addLayout(cvlay)
         vlay.addLayout(hlay)
+    
+    def defineUsageTab(self, tab):
+        self.usageDirty = True
+        self.usageCalc = None
+        self.usageResult = None
+        self.usageTab = tab
         
+        # ms
+        self.usageCallTimerInterval = 10
+        self.usageCalcTime = 1
+        
+        vlay = QVBoxLayout()
+        self.usageLabel = QLabel("usage")
+        vlay.addWidget(self.usageLabel)
+        tab.setLayout(vlay)
+        
+        # usage calculation timer
+        
+        timer = QTimer(self)
+        timer.timeout.connect(self.updateUsage)
+        timer.start(10)
+    
+    def updateUsage(self, iterations=1):
+        if self.usageDirty == False and self.usageResult is not None:
+            return
+        try:
+            if self.usageCalc is None:
+                self.usageDirty = False
+                # note that no path is provided, so it won't save to disk.
+                self.usageCalc = model.saveRom(self.rom, self.j)
+            for i in range(iterations):
+                next(self.usageCalc)
+        except StopIteration as e:
+            regions, errors = e.value
+            self.usageResult = {
+                "regions": regions,
+                "errors": errors
+            }
+            self.usageCalc = None
+        self.updateUsageLabel()
+            
     def defineChunksTab(self, tab):
         vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 0)
         hlay = QHBoxLayout()
@@ -1292,6 +1342,28 @@ class MainWindow(QMainWindow):
         self.setSublevel(sublevel)
         self.tabs.setCurrentWidget(self.layTab)
     
+    def updateUsageLabel(self):
+        text = "Usage"
+        icon = self.emptyIcon
+        if self.usageDirty:
+            text += "*"
+        if self.usageCalc is not None:
+            text += " (calculating)"
+        if self.usageResult is not None:
+            for error in self.usageResult["errors"]:
+                text += "\nERROR: " + error
+                icon = self.errorIcon
+            for region in self.usageResult["regions"]:
+                name, size, maxsize = region
+                text += f"\n{name}: {size if size is not None else '?'}/{maxsize}"
+            self.usageLabel.setText(text)
+            
+        tabtext = "Usage"
+        if self.usageDirty:
+            tabtext += "*"
+        self.tabs.setTabText(self.tabs.indexOf(self.usageTab), tabtext)
+        self.tabs.setTabIcon(self.tabs.indexOf(self.usageTab), icon)
+    
     def updateLay(self):
         jl, jsl, js = self.getLevelJ()
         level, sublevel, screen = self.getLevel()
@@ -1386,6 +1458,9 @@ class MainWindow(QMainWindow):
         
         self.updateLay()
         
+    def onUndoBuffer(self, kind):
+        self.usageDirty = True
+        
     def undo(self):
         self.undoBuffer.undo()
         
@@ -1455,7 +1530,7 @@ class MainWindow(QMainWindow):
     def onFileIO(self, target, save):
         if target == "rom":
             print("Exporting rom...")
-            regions, errors = model.saveRom(self.rom, self.j, "hack.gb")
+            regions, errors = model.syncSaveRom(self.rom, self.j, "hack.gb")
             print("Done.")
             for error in errors:
                 print(error)

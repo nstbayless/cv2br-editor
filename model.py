@@ -410,6 +410,10 @@ def getEnterabilityLayout(j, level, sublevel):
 
 # ------------------------------------------------------
 
+class SaveProgress:
+    def __init__(self):
+        pass
+
 class SaveContext:
     def __init__(self, gb, j):
         self.gb = list(copy.copy(gb))
@@ -545,14 +549,23 @@ class SaveContext:
             return self.readByte(bank, addr) | (self.readByte(bank, addr+1) << 8)
         else:
             return self.readByte(bank, addr+1) | (self.readByte(bank, addr) << 8)
-    
+
+def syncSaveRom(gb, j, path=None):
+    try:
+        g = saveRom(gb, j, path)
+        while True:
+            next(g)
+    except StopIteration as e:
+        return e.value
         
 # returns:
 #  - a list of (regionname, size, maxsize)
 #  - a list of errors, or empty if successful
 def saveRom(gb, j, path=None):
     assert(len(gb) > 0 and len(gb) % 0x4000 == 0)
-    regions, errors, gb = _saveRom(SaveContext(gb, j))
+    ctx = SaveContext(gb, j)
+    yield from _saveRom(ctx)
+    regions, errors, gb = ctx.result
     if path is not None and gb is not None:
         try:
             with open(path, "wb") as f:
@@ -565,36 +578,46 @@ def saveRom(gb, j, path=None):
     
 def _saveRom(ctx: SaveContext):
     try:
-        writeRom(ctx)
+        yield from writeRom(ctx)
         
         for key in ctx.regions.keys():
             c = ctx.regions[key].used
             m = ctx.regions[key].max
             if c > m:
                 ctx.errors.append(f"Region \"{key}\" exceeded ({c:04X} > {m:04X} bytes)")
-                
-        return [(key, ctx.regions[key].used, ctx.regions[key].max) for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
+        ctx.result = [(key, ctx.regions[key].used, ctx.regions[key].max) for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
     except Exception as e:
         errors = [f"Fatal: {e}\n{traceback.format_exc()}"]
         regions = [(key, None, ctx.regions[key]["max"]) for key in ctx.regions.keys()]
-        return regions, errors, None
+        ctx.result = regions, errors, None
     
 def writeRom(ctx: SaveContext):
+    yield SaveProgress()
+    
     # TODO: tileset_common (* no gui support)
     # TODO: level.tileset  (* no gui support)
     constructScreenRemapping(ctx)
+    yield SaveProgress()
     writeScreenTiles(ctx)
+    yield SaveProgress()
     writeScreenLayout(ctx)
+    yield SaveProgress()
     writeSublevelVertical(ctx)
+    yield SaveProgress()
     writeEntities(ctx)
+    yield SaveProgress()
     writeChunks(ctx)
+    yield SaveProgress()
     writeEntC4Routine(ctx)
+    yield SaveProgress()
     
     # this one reads some of the screenTiles from before
     writeSublevelInitRoutines(ctx)
+    yield SaveProgress()
     
     # do this one last, it's an opportunist
     writeLoadEnclosedScreenEntityBugfixPatch(ctx)
+    yield SaveProgress()
     
 def constructScreenRemapping(ctx: SaveContext):
     for i, jl in enumerate(ctx.j.levels):
