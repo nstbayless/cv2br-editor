@@ -411,7 +411,7 @@ def getEnterabilityLayout(j, level, sublevel):
 # ------------------------------------------------------
 
 class SaveProgress:
-    def __init__(self):
+    def __init__(self, text=None):
         pass
 
 class SaveContext:
@@ -564,6 +564,12 @@ def syncSaveRom(gb, j, path=None):
 def saveRom(gb, j, path=None):
     assert(len(gb) > 0 and len(gb) % 0x4000 == 0)
     ctx = SaveContext(gb, j)
+    
+    # this hack ensures there's a bit of time between
+    # pressing a UI element and observing any noticeable lag
+    for i in range(10):
+        yield SaveProgress()
+        
     yield from _saveRom(ctx)
     regions, errors, gb = ctx.result
     if path is not None and gb is not None:
@@ -830,6 +836,8 @@ def constructRemappedLayout(ctx: SaveContext, level, sublevel, preview=False):
     
     for x in range(16):
         for y in range(16):
+            if jsl.layout[x][y] == 0 and x == jsl.startx and y == jsl.starty:
+                ctx.errors += [f"{jl.name}-{sublevel+1}: Start screen ({jsl.startx}, {jsl.starty}) is empty"]
             if jsl.layout[x][y] > 0:
                 layout[x][y] &= 0xF0
                 assert ctx.screenRemap[(level, sublevel, x, y)] < 0x10
@@ -1322,6 +1330,7 @@ def writeChunks(ctx: SaveContext):
                         addr += 1
             else:
                 addrs.append(0)
+                taddr += 2
                 assert "chunklink" in jl
                 ctx.writeWord(bank, taddr, addrs[jl.chunklink])
     

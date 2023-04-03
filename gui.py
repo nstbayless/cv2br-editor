@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, Q
 import functools
 import copy
 import signal
+import time
 
 # allows PyQt to close with ctrl+C
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -40,6 +41,48 @@ SCREENSCROLLS = {
 }
 SCREENSCROLLNAMES_H = ["Free Scrolling", "Enclosed", "Left", "Right"]
 SCREENSCROLLNAMES_V = ["Free Scrolling", "Enclosed", "Top", "Bottom"]
+
+class UsageBar(QWidget):
+    def __init__(self, label=None):
+        super().__init__()
+        self.used = None
+        self.max = None
+        self.label = label
+        self.setMinimumHeight(15)
+        self.setMaximumHeight(40)
+    
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+        
+        
+        painter.setPen(Qt.NoPen)
+        painter.fillRect(QRect(0, 0, w, h), Qt.black)
+        
+        nullUsage = self.used is None or self.max is None
+        text = "" if not self.label else f"{self.label}: "
+        if not nullUsage:
+            p = self.used/self.max
+            if p > 1:
+                color = Qt.red
+            else:
+                color = QColor(0x30, 0x33, 0xE0)
+            painter.fillRect(0, 0, w*p, h, color)
+            text += f"{self.used:X}/{self.max:X} ({self.used/self.max*100:2.2f}%)"
+        else:
+            text += "~"
+            pass 
+        
+        pen = QPen(Qt.black)
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRect(0, 0, w, h))
+        
+        pen = QPen(Qt.white)
+        painter.setPen(pen)
+        painter.drawText(QRect(0, 0, w, h), Qt.AlignCenter, text)
+        
 
 # Undoable Action
 class UAction:
@@ -280,7 +323,7 @@ class ChunkEdit(ChunkWidget):
             app.setChunk(chidx)
             if self.restoreTab is not None:
                 app.tabs.setCurrentWidget(self.restoreTab)
-        
+                
         return restore
         
     def editable(self):
@@ -984,20 +1027,37 @@ class MainWindow(QMainWindow):
         cvlay.addLayout(bhlay)
         hlay.addLayout(cvlay)
         vlay.addLayout(hlay)
+        
+    def timeInSeconds(self):
+        return time.time()
     
     def defineUsageTab(self, tab):
         self.usageDirty = True
         self.usageCalc = None
         self.usageResult = None
         self.usageTab = tab
+        self.usageCalcTime = 0
         
         # ms
         self.usageCallTimerInterval = 10
-        self.usageCalcTime = 1
+        self.usageCalcSpinTime = 1
         
         vlay = QVBoxLayout()
         self.usageLabel = QLabel("usage")
-        vlay.addWidget(self.usageLabel)
+        labelScroll = QScrollArea(self)
+        labelScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        labelScroll.setWidget(self.usageLabel)
+        labelScroll.setWidgetResizable(True)
+        vlay.addWidget(labelScroll)
+        
+        bars = QScrollArea(self)
+        bars.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        bars.setWidgetResizable(True)
+        self.usageBarLayout = QVBoxLayout(bars)
+        self.usageBars = dict()
+        bars.setLayout(self.usageBarLayout)
+        vlay.addWidget(bars)
+        
         tab.setLayout(vlay)
         
         # usage calculation timer
@@ -1007,7 +1067,7 @@ class MainWindow(QMainWindow):
         timer.start(10)
     
     def updateUsage(self, iterations=1):
-        if self.usageDirty == False and self.usageResult is not None:
+        if self.usageDirty == False and self.usageResult is not None and self.timeInSeconds() - self.usageCalcTime < 5:
             return
         try:
             if self.usageCalc is None:
@@ -1017,11 +1077,26 @@ class MainWindow(QMainWindow):
             for i in range(iterations):
                 next(self.usageCalc)
         except StopIteration as e:
+            self.usageCalcTime = self.timeInSeconds()
             regions, errors = e.value
             self.usageResult = {
                 "regions": regions,
                 "errors": errors
             }
+            names = set([region[0] for region in regions])
+            if names != set(self.usageBars.keys()):
+                for key in self.usageBars.keys():
+                    self.usageBarLayout.removeWidget(self.usageBars[key])
+                    self.usageBars[key].deleteLater()
+                self.usageBars.clear()
+                for regionname, used, max in regions:
+                    usageBar = UsageBar(regionname)
+                    self.usageBarLayout.addWidget(usageBar)
+                    self.usageBars[regionname] = usageBar
+            for name, used, max in regions:
+                assert name in self.usageBars
+                self.usageBars[name].used = used
+                self.usageBars[name].max = max
             self.usageCalc = None
         self.updateUsageLabel()
             
