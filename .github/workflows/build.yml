@@ -31,8 +31,8 @@ jobs:
     - run: python3 -m pip install PySide6==6.2.4
     
     - run: python3 -m pip show -f PySide6
-    - run: dir ${{ env.RUNNER_TOOL_CACHE }}\windows\python\3.6.8\x64\lib /s
-    - run: dir ${{ env.RUNNER_TOOL_CACHE }}\windows\python\3.6.8\x64\lib\site-packages\PySide6 /s
+    - run: dir  c:\hostedtoolcache\windows\python\3.6.8\x64\lib /s
+    - run: dir  c:\hostedtoolcache\windows\python\3.6.8\x64\lib\site-packages\PySide6 /s
       
     # pyinstaller build
     - name: build with pyinstaller
