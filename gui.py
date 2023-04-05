@@ -7,13 +7,32 @@ from PySide6.QtWidgets import \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
     QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton, \
-    QCheckBox, QFrame, QStyle
+    QCheckBox, QFrame, QStyle, QFileDialog, QMessageBox
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence, QPolygon
 from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint, QTimer
 import functools
 import copy
 import signal
 import time
+import threading
+import os
+import glob
+import json
+
+APPNAME = "RevEdit"
+IO_OPEN = 0
+IO_SAVE = 1
+IO_SAVEAS = 2
+
+guipath = "."
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle, the PyInstaller bootloader
+    # extends the sys module by a flag frozen=True and sets the app 
+    # path into variable _MEIPASS'.
+    guipath = sys._MEIPASS
+else:
+    guipath = os.path.dirname(os.path.abspath(__file__))
+
 
 # allows PyQt to close with ctrl+C
 signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -743,11 +762,12 @@ class RoomLayWidget(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, rom):
         super(MainWindow, self).__init__()
-        self.rom, self.j = model.loadRom("base-us.gb")
+        self.rom, self.j = model.loadRom(rom)
         model.addEmptyScreens(self.j)
         self.undoBuffer = UndoBuffer(self, self.onUndoBuffer)
+        self.ioStore = dict()
         self.vram = VRam(self.j, self.rom)
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
@@ -777,7 +797,7 @@ class MainWindow(QMainWindow):
         for cat in CATS:
             self.catIcons[cat] = QIcon(f"etc/ent{cat}.png")
         
-        self.setWindowTitle("RevEdit")    
+        self.setWindowTitle(APPNAME)
         self.defineActions()
         self.defineMenus()
         self.defineTabs()
@@ -796,19 +816,19 @@ class MainWindow(QMainWindow):
 
     def defineActions(self):
         self.actLoad = QAction("&Open Hack...", self)
-        self.actLoad.triggered.connect(functools.partial(self.onFileIO, "hack", 0))
+        self.actLoad.triggered.connect(functools.partial(self.onFileIO, "hack", IO_OPEN))
         self.actLoad.setShortcut(QKeySequence("ctrl+o"))
         
         self.actSave = QAction("&Save Hack", self)
-        self.actSave.triggered.connect(functools.partial(self.onFileIO, "hack", 1))
+        self.actSave.triggered.connect(functools.partial(self.onFileIO, "hack", IO_SAVE))
         self.actSave.setShortcut(QKeySequence("ctrl+s"))
         
         self.actSaveAs = QAction("&Save Hack As...", self)
-        self.actSaveAs.triggered.connect(functools.partial(self.onFileIO, "hack", 2))
+        self.actSaveAs.triggered.connect(functools.partial(self.onFileIO, "hack", IO_SAVEAS))
         self.actSaveAs.setShortcut(QKeySequence("ctrl+shift+s"))
         
         self.actExport = QAction("&Export ROM...", self)
-        self.actExport.triggered.connect(functools.partial(self.onFileIO, "rom", 2))
+        self.actExport.triggered.connect(functools.partial(self.onFileIO, "rom", IO_SAVEAS))
         self.actExport.setShortcut(QKeySequence("ctrl+e"))
         
         self.actUndo = QAction("&Undo", self)
@@ -1035,8 +1055,10 @@ class MainWindow(QMainWindow):
         self.usageDirty = True
         self.usageCalc = None
         self.usageResult = None
+        self.prevUsageResult = None
         self.usageTab = tab
         self.usageCalcTime = 0
+        self.usageLock = threading.Lock()
         
         # ms
         self.usageCallTimerInterval = 10
@@ -1067,37 +1089,29 @@ class MainWindow(QMainWindow):
         timer.start(10)
     
     def updateUsage(self, iterations=1):
-        if self.usageDirty == False and self.usageResult is not None and self.timeInSeconds() - self.usageCalcTime < 5:
-            return
-        try:
+        self.updateUsageLabel()
+        
+        with self.usageLock:
+            if self.usageDirty == False and self.usageResult is not None and self.timeInSeconds() - self.usageCalcTime < 5:
+                return
             if self.usageCalc is None:
                 self.usageDirty = False
+                self.usageCalc = 1
                 # note that no path is provided, so it won't save to disk.
-                self.usageCalc = model.saveRom(self.rom, self.j)
-            for i in range(iterations):
-                next(self.usageCalc)
-        except StopIteration as e:
-            self.usageCalcTime = self.timeInSeconds()
-            regions, errors = e.value
-            self.usageResult = {
-                "regions": regions,
-                "errors": errors
-            }
-            names = set([region[0] for region in regions])
-            if names != set(self.usageBars.keys()):
-                for key in self.usageBars.keys():
-                    self.usageBarLayout.removeWidget(self.usageBars[key])
-                    self.usageBars[key].deleteLater()
-                self.usageBars.clear()
-                for regionname, used, max in regions:
-                    usageBar = UsageBar(regionname)
-                    self.usageBarLayout.addWidget(usageBar)
-                    self.usageBars[regionname] = usageBar
-            for name, used, max in regions:
-                assert name in self.usageBars
-                self.usageBars[name].used = used
-                self.usageBars[name].max = max
-            self.usageCalc = None
+                def threadRoutine():
+                    regions, errors = model.saveRom(self.rom, copy.deepcopy(self.j))
+                    
+                    #print("locking...")
+                    with self.usageLock:
+                        #print("locked.")
+                        self.usageCalcTime = self.timeInSeconds()
+                        self.usageResult = {
+                            "regions": regions,
+                            "errors": errors
+                        }
+                        self.usageCalc = None
+                threading.Thread(target=threadRoutine).start()
+        
         self.updateUsageLabel()
             
     def defineChunksTab(self, tab):
@@ -1418,26 +1432,43 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.layTab)
     
     def updateUsageLabel(self):
-        text = "Usage"
-        icon = self.emptyIcon
-        if self.usageDirty:
-            text += "*"
-        if self.usageCalc is not None:
-            text += " (calculating)"
-        if self.usageResult is not None:
-            for error in self.usageResult["errors"]:
-                text += "\nERROR: " + error
-                icon = self.errorIcon
-            for region in self.usageResult["regions"]:
-                name, size, maxsize = region
-                text += f"\n{name}: {size if size is not None else '?'}/{maxsize}"
-            self.usageLabel.setText(text)
+        with self.usageLock:
+            if self.usageResult is not self.prevUsageResult:
+                self.prevUsageResult = self.usageResult
+                regions = self.usageResult["regions"]
+                names = set([region[0] for region in regions])
+                if names != set(self.usageBars.keys()):
+                    for key in self.usageBars.keys():
+                        self.usageBarLayout.removeWidget(self.usageBars[key])
+                        self.usageBars[key].deleteLater()
+                    self.usageBars.clear()
+                    for regionname, used, max in regions:
+                        usageBar = UsageBar(regionname)
+                        self.usageBarLayout.addWidget(usageBar)
+                        self.usageBars[regionname] = usageBar
+                for name, used, max in regions:
+                    assert name in self.usageBars
+                    self.usageBars[name].used = used
+                    self.usageBars[name].max = max
+                    self.usageBars[name].update()
             
-        tabtext = "Usage"
-        if self.usageDirty:
-            tabtext += "*"
-        self.tabs.setTabText(self.tabs.indexOf(self.usageTab), tabtext)
-        self.tabs.setTabIcon(self.tabs.indexOf(self.usageTab), icon)
+            text = "Usage"
+            icon = self.emptyIcon
+            if self.usageDirty:
+                text += "*"
+            if self.usageCalc is not None:
+                text += " (calculating)"
+            if self.usageResult is not None:
+                for error in self.usageResult["errors"]:
+                    text += "\nERROR: " + error
+                    icon = self.errorIcon
+                self.usageLabel.setText(text)
+                
+            tabtext = "Usage"
+            if self.usageDirty:
+                tabtext += "*"
+            self.tabs.setTabText(self.tabs.indexOf(self.usageTab), tabtext)
+            self.tabs.setTabIcon(self.tabs.indexOf(self.usageTab), icon)
     
     def updateLay(self):
         jl, jsl, js = self.getLevelJ()
@@ -1602,18 +1633,104 @@ class MainWindow(QMainWindow):
     # load = 0
     # save = 1
     # saveas = 2
-    def onFileIO(self, target, save):
-        if target == "rom":
-            print("Exporting rom...")
-            regions, errors = model.syncSaveRom(self.rom, self.j, "hack.gb")
-            print("Done.")
-            for error in errors:
-                print(error)
-        pass
+    def onFileIO(self, target, mode):
         
+        verb = "Select" if target == IO_OPEN else "Save"
+        
+        DMESG = {
+            "rom": f"{verb} a ROM file",
+            "hack": f"{verb} a hack file"
+        }
+        
+        DFILT = {
+            "rom": "ROM files (*.gb *.gbc *.bin)",
+            "hack": "Hack files (*.json)"
+        }
+        
+        path = None
+        if mode == IO_SAVE:
+            if target in self.ioStore:
+                path = self.ioStore[target]
+            else:
+                mode = IO_SAVEAS
+        if path is None:
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            file_dialog = QFileDialog(self, DMESG[target], "", DFILT[target], options=options)
+            file_dialog.setAcceptMode(QFileDialog.AcceptOpen if mode == IO_OPEN else QFileDialog.AcceptSave)
+            file_dialog.fileSelected.connect(lambda path: self.onFileIOSync(target, mode, path) if path is not None else None)
+            file_dialog.show()
+        else:
+            self.onFileIOSync(target, mode, path)
+    
+    def onFileIOSync(self, target, mode, path):
+        assert path is not None
+        self.ioStore[target] = path
+        
+        if target == "rom":
+            assert mode == IO_SAVEAS
+            print("Exporting rom...")
+            _, errors = model.saveRom(self.rom, self.j, "hack.gb")
+            print("Done.")
+            
+            if len(errors) > 0:
+                result = ""
+                for error in errors:
+                    result += error + "\n"
+                QMessageBox.information(
+                    parent=None,
+                    title='Error exporting rom',
+                    text=result
+                )
+                
+        elif target == "json":
+            if mode == IO_OPEN:
+                with open(path, "r") as f:
+                    self.undoBuffer.clear()
+                    j = json.load(f)
+                    self.j = j
+            elif mode in [IO_SAVE, IO_SAVEAS]:
+                with open(path, "w") as f:
+                    json.dump(self.j, f, ensure_ascii=False, indent=4)
+
 app = QApplication(sys.argv)
 
-window = MainWindow()
-window.show()
+base = None
+multibase = False
+for candidate in ["base.gb", "base-us.gb", "base-jp.gb", "base-kgbc4eu.gb"]:
+    if os.path.exists(os.path.join(guipath, candidate)):
+        base = os.path.join(guipath, candidate)
+        break
+else:
+    candidates = glob.glob(os.path.join(guipath, "*.gb"))
+    if len(candidates) == 1:
+        base = candidates[0]
+    elif len(candidates) == 0:
+        candidates = glob.glob("*.gb")
+        if len(candidates) == 1:
+            base = candidates[0]
+    if len(candidates) > 1:
+        multibase = True
 
-app.exec()
+if base is None:
+    text = f"Place a gameboy rom in the {APPNAME} directory to automatically load a ROM on startup. Alternatively, select one now."
+    if multibase:
+        text = f"Place exactly one gameboy rom in the {APPNAME} directory to automatically load a ROM on startup"
+        text += f"\n\nMultiple ROMs were found, so {APPNAME} can't disambiguate which one to load.\nYou can rename one of them to \"base.gb\", or else select one now."
+    messageBox = QMessageBox()
+    messageBox.setWindowTitle("Provide a ROM")
+    messageBox.setText(text)
+    messageBox.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+    result = messageBox.exec()
+    if result != QMessageBox.Ok:
+        sys.exit(1)
+    else:
+        file_path, _ = QFileDialog.getOpenFileName(None, "Select ROM File", "", "ROM files (*.gb *.gbc *.bin)")
+        if file_path:
+            base = file_path
+
+if base is not None:
+    window = MainWindow(base)
+    window.show()
+
+    app.exec()

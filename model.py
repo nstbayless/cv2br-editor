@@ -76,10 +76,10 @@ def loadRom(path):
                 for sublevel in range(rom.SUBSTAGECOUNT[i]):
                     jsl = JSONDict()
                     jl.sublevels.append(jsl)
-                    loadSublevelInitRoutine(j, i, sublevel)
                     loadSublevelScreens(j, i, sublevel)
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
+                    loadSublevelInitRoutine(j, i, sublevel)
         loadEntC4Routine(j)
         return rom.data, j        
 
@@ -133,6 +133,19 @@ def loadInitRoutine(j, bank, addr, level=None):
             r.append(JSONDict({"type": "SCREEN", "dstAddr": bc, "data": screendata}))
             if level is None:
                 r[-1].hl = hl
+                
+            # instead of data, link to an existing screen if possible
+            linkscreen = None
+            for _level, jl in enumerate(j.levels):
+                if _level != 0:
+                    for sublevel, jsl in enumerate(jl.sublevels):
+                        for screen, js in enumerate(jsl.screens):
+                            if js.data == screendata:
+                                linkscreen = (_level, sublevel, screen)
+            
+            if linkscreen is not None:
+                r[-1].linkscreen = linkscreen
+                del r[-1]["data"]
             
             addr += 3*4
             if rom.readbyte(bank, addr-3) == 0xC3: # jp
@@ -410,10 +423,6 @@ def getEnterabilityLayout(j, level, sublevel):
 
 # ------------------------------------------------------
 
-class SaveProgress:
-    def __init__(self, text=None):
-        pass
-
 class SaveContext:
     def __init__(self, gb, j):
         self.gb = list(copy.copy(gb))
@@ -549,14 +558,6 @@ class SaveContext:
             return self.readByte(bank, addr) | (self.readByte(bank, addr+1) << 8)
         else:
             return self.readByte(bank, addr+1) | (self.readByte(bank, addr) << 8)
-
-def syncSaveRom(gb, j, path=None):
-    try:
-        g = saveRom(gb, j, path)
-        while True:
-            next(g)
-    except StopIteration as e:
-        return e.value
         
 # returns:
 #  - a list of (regionname, size, maxsize)
@@ -565,12 +566,7 @@ def saveRom(gb, j, path=None):
     assert(len(gb) > 0 and len(gb) % 0x4000 == 0)
     ctx = SaveContext(gb, j)
     
-    # this hack ensures there's a bit of time between
-    # pressing a UI element and observing any noticeable lag
-    for i in range(10):
-        yield SaveProgress()
-        
-    yield from _saveRom(ctx)
+    _saveRom(ctx)
     regions, errors, gb = ctx.result
     if path is not None and gb is not None:
         try:
@@ -584,7 +580,7 @@ def saveRom(gb, j, path=None):
     
 def _saveRom(ctx: SaveContext):
     try:
-        yield from writeRom(ctx)
+        writeRom(ctx)
         
         for key in ctx.regions.keys():
             c = ctx.regions[key].used
@@ -598,32 +594,21 @@ def _saveRom(ctx: SaveContext):
         ctx.result = regions, errors, None
     
 def writeRom(ctx: SaveContext):
-    yield SaveProgress()
-    
     # TODO: tileset_common (* no gui support)
     # TODO: level.tileset  (* no gui support)
     constructScreenRemapping(ctx)
-    yield SaveProgress()
     writeScreenTiles(ctx)
-    yield SaveProgress()
     writeScreenLayout(ctx)
-    yield SaveProgress()
     writeSublevelVertical(ctx)
-    yield SaveProgress()
     writeEntities(ctx)
-    yield SaveProgress()
     writeChunks(ctx)
-    yield SaveProgress()
     writeEntC4Routine(ctx)
-    yield SaveProgress()
     
     # this one reads some of the screenTiles from before
     writeSublevelInitRoutines(ctx)
-    yield SaveProgress()
     
     # do this one last, it's an opportunist
     writeLoadEnclosedScreenEntityBugfixPatch(ctx)
-    yield SaveProgress()
     
 def constructScreenRemapping(ctx: SaveContext):
     for i, jl in enumerate(ctx.j.levels):
@@ -1525,12 +1510,12 @@ def writeEntC4Routine(ctx):
                 0x3E, 0x20, # ld a, $20
                 0xEA, *word(0xCA96), # ld ($ca96), a
                 0x01, routine.scanline, routine.effect, # ld bc, <effect><scanline>
-                0xC3, *word(rom.SET_SCANLINE_EFFECT), # jp SET_SCANLINE_EFFECT
+                getRetOrCallOpcode(), *word(rom.SET_SCANLINE_EFFECT), # jp SET_SCANLINE_EFFECT
             ]
         elif routine.type == "SCREEN":
             hl = routine.hl
             bc = routine.dstAddr
-            de = getAddressForScreenOrAddScreen(ctx, routine.data)
+            de = getAddressForScreenOrAddScreen(ctx, routine)
             data += [
                 0x01, *word(bc), # ld bc, ...
                 0x11, *word(de), # ld de, ...
@@ -1631,7 +1616,7 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
                     hunk += [count]
                 for scroutine in jsl.initRoutines[i:]:
                     bc = scroutine.dstAddr
-                    de = getAddressForScreenOrAddScreen(ctx, scroutine.data)
+                    de = getAddressForScreenOrAddScreen(ctx, scroutine)
                     hunk += word(bc)
                     hunk += word(de)
                     
@@ -1641,7 +1626,7 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
                     return hunk
             else:
                 bc = routine.dstAddr
-                de = getAddressForScreenOrAddScreen(ctx, routine.data)
+                de = getAddressForScreenOrAddScreen(ctx, routine)
                 hunk += [
                     0x01, *word(bc), # ld bc, ...
                     0x11, *word(de), # ld de, ...
@@ -1663,6 +1648,14 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
         return hunk
             
 def getAddressForScreenOrAddScreen(ctx: SaveContext, data):
+    if type(data) != list:
+        assert "data" in data or "linkscreen" in data
+        if "data" in data:
+            data = data.data
+        else:
+            level, sublevel, screen = data.linksceen
+            data = ctx.levels[level].sublevel[sublevel].screens[screen]
+            
     region = ctx.regions.ScreenTiles
     bank = region.bank
     addr = region.addr
