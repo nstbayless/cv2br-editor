@@ -1315,9 +1315,9 @@ def writeChunks(ctx: SaveContext):
                         addr += 1
             else:
                 addrs.append(0)
-                taddr += 2
                 assert "chunklink" in jl
                 ctx.writeWord(bank, taddr, addrs[jl.chunklink])
+                taddr += 2
     
     ctx.regions.ChunkTable.used = taddr - ctx.regions.ChunkTable.addr
     ctx.regions.ChunkValues.used = addr - ctx.regions.ChunkValues.addr

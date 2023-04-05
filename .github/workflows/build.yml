@@ -1,0 +1,71 @@
+name: 'Build'
+
+on:
+  push:
+    branches: [ master, main, dev ]
+  pull_request:
+    branches: [ master, main, dev ]
+  release:
+    types: [created]
+  schedule:
+    # run every saturday at 5:29 AM PST
+    - cron: '29 13 * * SAT'
+  workflow_dispatch: # can run this manually
+jobs:  
+  # 32-bit windows build
+  build-win32:
+    runs-on: windows-latest
+    steps:
+        
+    # pull ------------------------
+    - uses: actions/checkout@v2
+      
+    # python 3.6 is required for pyinstaller
+    # TODO: cache this.
+    - name: Set up Python3.6
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.6'
+    - run: python3 -m pip install setuptools==50.3.2
+    - run: python3 -m pip install pyinstaller==4.0 -vvv
+    - run: python3 -m pip install PySide6==6.2.4
+      
+    # pyinstaller build
+    - name: build with pyinstaller
+      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc/entenemies.png;etc/entmisc.png;entitems.png"
+      
+    - run: move dist\\RevEdit RevEdit
+    
+    # test
+    - run: python3 ./gui.py --help
+    - run: RevEdit\\RevEdit --help
+    
+    # release
+    - uses: actions/upload-artifact@v2
+      with:
+        name: RevEdit
+        path: RevEdit/
+    
+    - name: Zip directory for release
+      if: ${{ github.event_name == 'release' && github.event.action != 'deleted' }}
+      run: |
+        powershell -command "Compress-Archive -Path 'RevEdit' -DestinationPath 'RevEdit.zip'"
+    
+    - name: Get release
+      if: ${{ github.event_name == 'release' && github.event.action != 'deleted' }}
+      id: get_release
+      uses: bruceadams/get-release@v1.2.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Release Asset
+      if: ${{ github.event_name == 'release' && github.event.action != 'deleted' }}
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.get_release.outputs.upload_url }}
+        asset_path: RevEdit.zip
+        asset_name: RevEdit-${{ github.event.release.tag_name }}.zip
+        asset_content_type: application/zip
+
