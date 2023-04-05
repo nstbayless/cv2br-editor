@@ -61,7 +61,7 @@ jobs:
 
     - name: Upload Release Asset (I)
       if: ${{ github.event_name == 'release' && github.event.action != 'deleted' }}
-      run: gh release upload ${{ github.event.release.tag_name }} RevEdit.zip
+      run: gh release upload ${{ github.event.release.tag_name }} --repo ${{ github.repository }} RevEdit.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
