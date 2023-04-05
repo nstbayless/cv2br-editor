@@ -792,10 +792,15 @@ class MainWindow(QMainWindow):
         self.errorIcon = QIcon.fromTheme("dialog-error")
         
         # TODO: use pyside6-rcc to build the resources
-        self.setWindowIcon(QIcon("etc/icon.png"))
         self.catIcons = {}
-        for cat in CATS:
-            self.catIcons[cat] = QIcon(f"etc/ent{cat}.png")
+        try:
+            self.setWindowIcon(QIcon(os.path.join(guipath, "etc/icon.png")))
+            for cat in CATS:
+                self.catIcons[cat] = QIcon(os.path.join(f"etc/ent{cat}.png"))
+        except:
+            for cat in CATS:
+                self.catIcons[cat] = self.errorIcon
+            
         
         self.setWindowTitle(APPNAME)
         self.defineActions()
