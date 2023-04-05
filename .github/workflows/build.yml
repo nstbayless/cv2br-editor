@@ -32,7 +32,7 @@ jobs:
       
     # pyinstaller build
     - name: build with pyinstaller
-      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc/entenemies.png;etc/entmisc.png;entitems.png"
+      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc"
       
     - run: move dist\\RevEdit RevEdit
     

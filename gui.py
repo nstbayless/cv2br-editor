@@ -1647,6 +1647,12 @@ class MainWindow(QMainWindow):
             "hack": "Hack files (*.json)"
         }
         
+        if target == "rom" and "rom-warning" not in self.ioStore:
+            QMessageBox.information(
+                self, 'Warning', f"Roms exported this way cannot be read back in by {APPNAME}.\n\nPlease ensure you save your hack (ctrl+s) -- and frequently, in case of unexpected crashes."
+            )
+            self.ioStore["rom-warning"] = True
+        
         path = None
         if mode == IO_SAVE:
             if target in self.ioStore:
@@ -1677,10 +1683,11 @@ class MainWindow(QMainWindow):
                 result = ""
                 for error in errors:
                     result += error + "\n"
+                    print("ERROR:", error)
                 QMessageBox.information(
-                    parent=None,
-                    title='Error exporting rom',
-                    text=result
+                    self,
+                    'Error exporting rom',
+                    result
                 )
                 
         elif target == "json":
@@ -1692,6 +1699,10 @@ class MainWindow(QMainWindow):
             elif mode in [IO_SAVE, IO_SAVEAS]:
                 with open(path, "w") as f:
                     json.dump(self.j, f, ensure_ascii=False, indent=4)
+
+if "--help" in sys.argv:
+    print(f"{APPNAME}")
+    sys.exit(0)
 
 app = QApplication(sys.argv)
 
