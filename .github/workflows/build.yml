@@ -37,7 +37,7 @@ jobs:
       run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc"
       
     - run: move dist\\RevEdit RevEdit
-    - run: copy /s C:\Python36\Lib\site-packages\PySide6\plugins\platforms RevEdit\platforms
+    - run: xcopy ${{ env.RUNNER_TOOL_CACHE }}\windows\python\3.6.8\x64\lib\site-packages\PySide6\plugins\platforms RevEdit\platforms /E/H/I
     
     # test
     - run: python3 ./gui.py --help
