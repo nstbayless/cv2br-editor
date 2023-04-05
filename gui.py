@@ -19,6 +19,13 @@ import os
 import glob
 import json
 
+try:
+    from ctypes import windll  # Only exists on Windows.
+    myappid = 'Rev.Ed.It.0'
+    windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+except ImportError:
+    pass
+
 APPNAME = "RevEdit"
 IO_OPEN = 0
 IO_SAVE = 1
