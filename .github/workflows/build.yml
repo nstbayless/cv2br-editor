@@ -64,15 +64,4 @@ jobs:
       run: gh release upload ${{ github.event.release.tag_name }} RevEdit.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-    - name: Upload Release Asset (II)    
-      if: ${{ github.event_name == 'release' && github.event.action != 'deleted' }}
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.get_release.outputs.upload_url }}
-        asset_path: RevEdit.zip
-        asset_name: RevEdit-${{ github.event.release.tag_name }}.zip
-        asset_content_type: application/zip
 
