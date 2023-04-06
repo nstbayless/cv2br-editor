@@ -1426,8 +1426,11 @@ def writePlaytestStart(ctx: SaveContext, level, sublevel=0):
         0x36, sublevel, #ld (hl), sublevel
         0xCD, *word(rom.LEVEL_START_28DB), #call 28db
         0x3E, 4, #lda 4
-        0xCD, *word(rom.LEVEL_START_0578), #call 578
+        0xC3, *word(rom.LEVEL_START_0578), #call 578
     ]
+    
+    ctx.writeBytes(0, rom.TITLE_DONEFADE, data)
+    addr = rom.TITLE_DONEFADE + len(data)
     
     if sublevel > 0 and rom.ENTGFXLOAD is not None:
         # copy next-area-graphics-loading routine wholesale.
@@ -1439,40 +1442,28 @@ def writePlaytestStart(ctx: SaveContext, level, sublevel=0):
             endcopy += 1
         endcopy += 3
         
-        data2 = []
+        detour_from = rom.LOADGFX_DETOUR+1
+        detour_to = ctx.readWord(rom.LOADGFX_DETOUR_BANK, detour_from)
+        ctx.writeWord(rom.LOADGFX_DETOUR_BANK, detour_from, addr)
+        # decrement c8c1
+        data2 = [
+            0x21, *word(0xc8c1), #ld hl, c8c1
+            0x97, # sub a
+            0xBE, # cp (hl)
+            0xC8, *word(detour_to), # jp z, ...
+            0xE5, # push hl
+            0x35, # dec (hl)
+        ]
+        
         for i in range(startcopy, endcopy):
             data2 += [ctx.readByte(rom.ENTGFXLOAD_BANK, i)]
         
-        # load one routine earlier, since we're not decementing C8C1 for this.
-        assert data2[0] == 0x21 # ld hl, ...
-        data2[2] -= 2
-        if data2[2] < 0:
-            data2[2] += 0x100
-            data2[1] -= 1
-        data += data2
-        
-        data += [
-            0x21, *word(0xCACB), #ld hl, $CACB
-            0xCB, 0xFE # set 7, (hl)
+        data2 += [
+            0xE1, # push hl
+            0x34, # inc (hl)
         ]
-        
-        detour_from = rom.LOADGFX_DETOUR+1
-        detour_to = ctx.readWord(rom.LOADGFX_DETOUR_BANK, detour_from)
-        detour_tramp = 0x3FF1
-        ctx.writeWord(rom.LOADGFX_DETOUR_BANK, detour_from, detour_tramp)
-        
-        data2 = [
-            0x21, *word(0xCACB),
-            0x7E, #ld a, (hl)
-            0x87, # add a, a
-            0xD2, *word(detour_to), # jp nc, ...
-            0xCB, 0xBE, # res 7, (hl)
-            0xD8, # ret
-        ]
-        ctx.writeBytes(0, detour_tramp, data2)
-    
-    data += [0xC9]
-    ctx.writeBytes(0, rom.TITLE_DONEFADE, data)
+        data2 += [0xC9] # ret
+        ctx.writeBytes(0, addr, data2)
 
 def writeChunks(ctx: SaveContext):
     tbank = ctx.regions.ChunkTable.bank
