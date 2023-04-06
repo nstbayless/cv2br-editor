@@ -1431,39 +1431,6 @@ def writePlaytestStart(ctx: SaveContext, level, sublevel=0):
     
     ctx.writeBytes(0, rom.TITLE_DONEFADE, data)
     addr = rom.TITLE_DONEFADE + len(data)
-    
-    if sublevel > 0 and rom.ENTGFXLOAD is not None:
-        # copy next-area-graphics-loading routine wholesale.
-        startcopy = rom.ENTGFXLOAD + 5
-        endcopy = startcopy
-        for i in range(2):
-            while ctx.readByte(rom.ENTGFXLOAD_BANK, endcopy) != 0xEF:
-                endcopy += 1
-            endcopy += 1
-        endcopy += 3
-        
-        detour_from = rom.LOADGFX_DETOUR+1
-        detour_to = ctx.readWord(rom.LOADGFX_DETOUR_BANK, detour_from)
-        ctx.writeWord(rom.LOADGFX_DETOUR_BANK, detour_from, addr)
-        # decrement c8c1
-        data2 = [
-            0x21, *word(0xc8c1), #ld hl, c8c1
-            0x97, # sub a
-            0xBE, # cp (hl)
-            0xC8, *word(detour_to), # jp z, ...
-            0xE5, # push hl
-            0x35, # dec (hl)
-        ]
-        
-        for i in range(startcopy, endcopy):
-            data2 += [ctx.readByte(rom.ENTGFXLOAD_BANK, i)]
-        
-        data2 += [
-            0xE1, # push hl
-            0x34, # inc (hl)
-        ]
-        data2 += [0xC9] # ret
-        ctx.writeBytes(0, addr, data2)
 
 def writeChunks(ctx: SaveContext):
     tbank = ctx.regions.ChunkTable.bank

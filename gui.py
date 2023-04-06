@@ -1703,11 +1703,21 @@ class MainWindow(QMainWindow):
             )
             return
         
-        if rom.ROMTYPE not in ["us", "jp"]:
+        if rom.ROMTYPE not in ["us"]:
+            # to be honest, it's unclear why jp roms don't work
+            # kgbc roms will require some more research to implement writePlaytestStart().
+            # (it's probably easy, just haven't tried.)
             QMessageBox.information(
-                self, 'ROM type not supported', f"US/JP roms only."
+                self, 'ROM type not supported', f"Only US ROMs can be playtested.."
             )
             return
+            
+        level, sublevel, screen = self.getLevel()
+        if "playtest-warning" not in self.ioStore and sublevel > 0:
+            QMessageBox.information(
+                self, 'Warning', f"Some graphical glitches are to be expected when playtesting from anywhere other than the start of a level."
+            )
+            self.ioStore["playtest-warning"] = True
         
         level, sublevel, screen = self.getLevel()
         path = os.path.join(tempfile.gettempdir(), "revedit_test.gb")
@@ -1802,7 +1812,7 @@ app = QApplication(sys.argv)
 
 base = None
 multibase = False
-for candidate in ["base.gb", "base-us.gb", "base-jp.gb", "base-kgbc4eu.gb"]:
+for candidate in ["base.gb", "base-us.gb", "base-kgbc4eu.gb", "base-jp.gb"]:
     if os.path.exists(os.path.join(guipath, candidate)):
         base = os.path.join(guipath, candidate)
         break
