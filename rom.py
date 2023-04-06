@@ -105,12 +105,36 @@ def get_entities_in_screens(level, sublevel):
     sublevelentstartbycat = [readtableword(BANK3, LEVTABS_AND_NAMES[i][0], level, sublevel) for i in range(3)]
     startx, starty, scrolldir, screens = produce_sublevel_screen_arrangement(level, sublevel)
     entstable = [[None for j in range(16)] for i in range(16)]
+    entsranges = [[[[] for i in range(3)] for j in range(16)] for i in range(16)]
     for x in range(16):
         for y in range(16):
             s = screens[x][y]
-            if s != 0 and entstable[x][y] is None:
+            if s != 0:
+                
                 sid = s & 0xf
                 stype = s >> 4
+                if sid >= maxsid:
+                    continue
+                
+                entslices = read_ent_slices(BANK3, readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel, sid))
+                permitted_cats = [0, 1, 2]
+                
+                if entstable[x][y] is not None:
+                    # partially processed this screen, but maybe
+                    # not for every entcat?
+                    for i, ranges in enumerate(entsranges[x][y]):
+                        for startrange, endrange in ranges:
+                            if startrange is not None and endrange is not None:
+                                if entslices[i][2] in range(startrange, endrange):
+                                    if i in permitted_cats:
+                                        permitted_cats.remove(i)
+                    #permitted_cats = []
+                    # already fully processed this screen.
+                    if len(permitted_cats) == 0:
+                        continue
+                    else:
+                        #print(f"curious entity list in {LEVELS[level]}-{sublevel+1}, screen {sid:X} for cats {permitted_cats}")
+                        pass
                 
                 # A is left/top of a long room
                 # B is a non-scrolling room
@@ -124,12 +148,8 @@ def get_entities_in_screens(level, sublevel):
                 endflood = {0xA: 0x9, 0xB: 0xB, 0x9: 0xA}[stype]
                 entsize = {0xA: 6, 0xB: 4, 0x9: 6}[stype]
                 
-                if sid >= maxsid:
-                    continue
-                
                 
                 # find start of 'room' in entity table for each entcat
-                entslices = read_ent_slices(BANK3, readtableword(BANK3, SCREEN_ENT_TABLE, level, sublevel, sid))
                 entroomstart = []
                 entroomend = []
                 
@@ -137,6 +157,10 @@ def get_entities_in_screens(level, sublevel):
                 #    breakpoint()
                 
                 for i, slice in enumerate(entslices):
+                    if i not in permitted_cats:
+                        entroomstart.append(None)
+                        entroomend.append(None)
+                        continue
                     start = slice[2]
                     if start is None:
                         entroomstart.append(None)
@@ -149,7 +173,7 @@ def get_entities_in_screens(level, sublevel):
                         end = start
                         # find start
                         while True:
-                            if start-1 == sublevelentstartbycat[i] or readbyte(BANK3, start-1) >= 0x80:
+                            if start <= sublevelentstartbycat[i] or readbyte(BANK3, start-1) >= 0xFD:
                                 entroomstart.append(start)
                                 break
                             else:
@@ -199,6 +223,7 @@ def get_entities_in_screens(level, sublevel):
                                     escreen = ((scroll >> 8) & 0x7f) + (ex + (scroll & 0xff)) // 0xa0
                                     if escreen != _x:
                                         continue
+                                    
                                     epos = (ex + (scroll & 0xff)) % 0xa0
                                     ents[-1].append({
                                         "x":epos,
@@ -224,7 +249,14 @@ def get_entities_in_screens(level, sublevel):
                                         "type":type,
                                         "margin-y": ey,
                                     })
-                    entstable[_x][_y] = ents
+                    if entstable[_x][_y] is None:
+                        entstable[_x][_y] = ents
+                    else:
+                        for i, entss in enumerate(ents):
+                            entstable[_x][_y][i] += entss
+                        #print(_x, _y, entstable[_x][_y])
+                    for i, (start, end) in enumerate(zip(entroomstart, entroomend)):
+                        entsranges[_x][_y][i].append((start, end))
                                     
                     if screens[_x][_y] >> 4 == endflood:
                         break
@@ -327,7 +359,39 @@ def readrom(_data):
     ENT4C_FLICKER_ROUTINE_BANK = 0
     ENT4C_FLICKER_ROUTINE = 0x1CE9
     ENT4C_FLICKER_ROUTINE_END = 0x1D14
+    global ENT78_FLICKER_ROUTINE
+    global ENT78_FLICKER_ROUTINE_END
+    global ENT78_FLICKER_ROUTINE_BANK
+    ENT78_FLICKER_ROUTINE_BANK = 0
+    ENT78_FLICKER_ROUTINE = 0x1EA9
+    ENT78_FLICKER_ROUTINE_END = 0x1EB5
+    global CRUSHER_ROUTINE_BANK
+    global CRUSHER_ROUTINE
+    global CRUSHER_ROUTINE_END
+    CRUSHER_ROUTINE = 0x1FC3
+    CRUSHER_ROUTINE_END = 0x1FDC
+    CRUSHER_ROUTINE_BANK = 0
+    global ENTGFXLOAD
+    global ENTGFXLOAD_BANK
+    ENTGFXLOAD_BANK = 0
+    ENTGFXLOAD = 0x0e4c
     
+    global LEVEL_START_2855
+    global LEVEL_START_28DB
+    global LEVEL_START_0578
+    global LOGO_FADE_ROUTINE
+    global TITLE_DONEFADE
+    global TITLE_DISPLAY
+    LEVEL_START_2855 = 0x2855
+    LEVEL_START_28DB = 0x28DB
+    LEVEL_START_0578 = 0x0578
+    LOGO_FADE_ROUTINE = 0x353
+    TITLE_DONEFADE = 0x49C
+    TITLE_DISPLAY = 0x3D3
+    global LOADGFX_DETOUR_BANK
+    global LOADGFX_DETOUR
+    LOADGFX_DETOUR_BANK = 3
+    LOADGFX_DETOUR = 0x7664
 
     # bank2
     global BANK2
@@ -368,11 +432,18 @@ def readrom(_data):
     BANK6 = 6
     global LEVEL_SCREEN_TABLE
     LEVEL_SCREEN_TABLE = 0x5020
+    global LOAD_LAYOUT_500B
+    LOAD_LAYOUT_500B = 0x500B
     
     if ROMTYPE == "jp":
         LEVEL_SCREEN_TABLE = 0x4fb0
         BSCREEN_BUGFIX_DETOUR = 0x6a54
+        LOAD_LAYOUT_500B = 0x4f9b
 
+    # to add kgbc3jp support, just need to do this for kgbc3jp, too...
+    # I suggest consulting a disassembly and looking for commonalities.
+    # pro tip: the WRAM addresses seem to be the same in all versions,
+    # this can help you identify analogous code. Good luck!
     if ROMTYPE == "kgbc4eu":
         BANK2 = 0x12
         BANK3 = 0x13
@@ -404,6 +475,15 @@ def readrom(_data):
         ENT4C_FLICKER_ROUTINE_BANK = 0x18
         ENT4C_FLICKER_ROUTINE = 0x6569
         ENT4C_FLICKER_ROUTINE_END = 0x6594
+        ENT78_FLICKER_ROUTINE_BANK = 0x18
+        ENT78_FLICKER_ROUTINE = 0x6720
+        ENT78_FLICKER_ROUTINE_END = 0x672C
+        CRUSHER_ROUTINE_BANK = 0x18
+        CRUSHER_ROUTINE = 0x683d
+        CRUSHER_ROUTINE_END = 0x6856
+        LOAD_LAYOUT_500B = 0x50b3
+        ENTGFXLOAD = None
+        TITLE_DISPLAY = None
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)
@@ -436,6 +516,7 @@ def readrom(_data):
         0x12: "VMOVPLAT",
         0x13: "HMOVPLAT",
         0x15: "BGANIM_PLANT",
+        0x16: "FGANIM_PLANT",
         0x1C: "ENM_SKELETON_1C",
         0x1E: "ENM_FORNEUS",
         0x1F: "ENM_BAT_1F",
@@ -474,6 +555,7 @@ def readrom(_data):
         0x58: "EXTRUDER_CTRL",
         0x5B: "ENM_NIGHTSTALKER",
         0x5D: "ENM_BEATLE",
+        0x5E: "DIMLIGHT",
         0x5F: "BGANIM_CLOUD",
         
         0x60: "BOSS_IRON_DOLL",
@@ -482,6 +564,7 @@ def readrom(_data):
         
         0x72: "BOSS_SOLEIL",
         0x73: "BOSS_DRACULA",
+        0x78: "BGFLICKER_ROCK",
     }
 
 def getEntityName(id):

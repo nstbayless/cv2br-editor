@@ -2,6 +2,10 @@ import rom
 from rom import readword, readtablebyte, readtableword, readbyte
 import copy
 import traceback
+import hashlib
+
+VERSION_INT=2023040515
+VERSION_NAME="v1.0"
 
 def flatten(l):
     a = []
@@ -34,6 +38,10 @@ def lcm_two(a, b):
     return a * b // gcd_two(a, b)
 
 class JSONDict(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        for key, value in kwargs.items():
+            self[key] = value
     # This class implemented by ChatGPT
     # WARNING! some attributes are overshadowed by native dict attributes
     # for example, you can't access groove.values directly, must do groove["values"].
@@ -58,6 +66,7 @@ def loadRom(path):
     with open(path, "rb") as f:
         rom.readrom(f.read())
         j = JSONDict()
+        j.VERSION=VERSION_INT
         j.tileset_common = getTilesetAtAddr(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_COMMON)
         j.screenTilesAddr = rom.readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, 1, 0)
         j.levels = []
@@ -80,13 +89,10 @@ def loadRom(path):
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
                     loadSublevelInitRoutine(j, i, sublevel)
-        loadEntC4Routine(j)
-        return rom.data, j        
-
-def loadEntC4Routine(j):
-    bank = rom.ENT4C_FLICKER_ROUTINE_BANK
-    addr = rom.ENT4C_FLICKER_ROUTINE
-    j.entC4Routine = loadInitRoutine(j, bank, addr)
+        j.entC4Routine = loadInitRoutine(j, rom.ENT4C_FLICKER_ROUTINE_BANK, rom.ENT4C_FLICKER_ROUTINE, maxAddr = rom.ENT4C_FLICKER_ROUTINE_END)
+        j.ent78Routine = loadInitRoutine(j, rom.ENT78_FLICKER_ROUTINE_BANK, rom.ENT78_FLICKER_ROUTINE, maxaddr=rom.ENT78_FLICKER_ROUTINE_END)
+        j.crusherRoutine = loadInitRoutine(j, rom.CRUSHER_ROUTINE_BANK, rom.CRUSHER_ROUTINE, maxaddr=rom.CRUSHER_ROUTINE_END)
+        return rom.data, j
 
 def loadSublevelInitRoutine(j, level, sublevel):
     jl = j.levels[level]
@@ -95,10 +101,14 @@ def loadSublevelInitRoutine(j, level, sublevel):
     addr = readtableword(bank, rom.VRAM_SPECIAL_ROUTINES, level, sublevel)
     jsl.initRoutines = loadInitRoutine(j, bank, addr, level)
 
-def loadInitRoutine(j, bank, addr, level=None):
+def loadInitRoutine(j, bank, addr, level=None, **kwargs):
     r = []
     
+    maxaddr = kwargs.get("maxaddr", None)
+    
     while True:
+        if maxaddr is not None and addr >= maxaddr:
+            return r
         assert len(r) < 10 # seems reasonable
         if rom.readbyte(bank, addr) == 0xC9: # ret
             return r
@@ -119,6 +129,55 @@ def loadInitRoutine(j, bank, addr, level=None):
         elif rom.readbyte(bank, addr+1) == 0x1B:
             r.append(JSONDict({"type": "UNKD802"}))
             addr += 8
+        elif rom.readbyte(bank, addr+6) == 0xFA:
+            de = [0, 0]
+            hl = [0, 0]
+            de[0] = rom.readword(bank, addr+1)
+            hl[0] = rom.readword(bank, addr+1+3)
+            de[1] = rom.readword(bank, addr+13+1)
+            hl[1] = rom.readword(bank, addr+13+1+3)
+            cplvl = rom.readbyte(bank, addr+10)
+            bc = rom.readword(bank, addr+19+1)
+            addr += 25
+            
+            if level is not None:
+                assert hl == rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
+            else:
+                for i in range(len(rom.LEVELS)):
+                    if rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, i) == hl[0] and i > 0:
+                        level = i
+                        break
+            assert level is not None
+            assert hl[1] == rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, cplvl)
+            
+            levels = [level, cplvl]
+            
+            screendata = [None, None]
+            linkscreen = [None, None]
+            
+            levelRoutineSpec = []
+            for i in range(2):
+                screendata[i] = [rom.readbyte(rom.BANK6, de[i]+j) for j in range(20)]
+                for _level, jl in enumerate(j.levels):
+                    if _level != 0:
+                        for sublevel, jsl in enumerate(jl.sublevels):
+                            for screen, js in enumerate(jsl.screens):
+                                if js.data == screendata:
+                                    linkscreen[i] = (_level, sublevel, screen)
+                                    screendata[i] = None
+                levelRoutineSpec.append(JSONDict({
+                    "srcAddr": de[i],
+                    "level": levels[i]
+                }))
+                if screendata[i] is not None:
+                    levelRoutineSpec[-1].data = screendata[i]
+                if linkscreen[i] is not None:
+                    levelRoutineSpec[-1].data = linkscreen[i]
+            
+            r.append(JSONDict({"type": "LVLSCREEN", "dstAddr": bc, "levels": levelRoutineSpec}))
+            if rom.readbyte(bank, addr-3) == 0xC3: # jp
+                break
+                
         elif rom.readbyte(bank, addr) == 0x11:
             de = rom.readword(bank, addr+1)
             hl = rom.readword(bank, addr+1+3)
@@ -127,12 +186,16 @@ def loadInitRoutine(j, bank, addr, level=None):
             
             if level is not None:
                 assert hl == rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, level)
+            else:
+                for i in range(len(rom.LEVELS)):
+                    if rom.readtableword(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2, i) == hl and i > 0:
+                        level = i
+                        break
+            assert level is not None
             
             screendata = [rom.readbyte(rom.BANK6, de+i) for i in range(20)]
             
-            r.append(JSONDict({"type": "SCREEN", "dstAddr": bc, "data": screendata}))
-            if level is None:
-                r[-1].hl = hl
+            r.append(JSONDict({"type": "SCREEN", "dstAddr": bc, "data": screendata, "srcAddr": de, "level": level}))
                 
             # instead of data, link to an existing screen if possible
             linkscreen = None
@@ -148,6 +211,11 @@ def loadInitRoutine(j, bank, addr, level=None):
                 del r[-1]["data"]
             
             addr += 3*4
+            
+            # exception -- these seem to be spurious! Pop these.
+            if (level, sublevel) in [(1, 0)]:
+                r = r[:-1]
+            
             if rom.readbyte(bank, addr-3) == 0xC3: # jp
                 break
         else:
@@ -424,9 +492,10 @@ def getEnterabilityLayout(j, level, sublevel):
 # ------------------------------------------------------
 
 class SaveContext:
-    def __init__(self, gb, j):
+    def __init__(self, gb, j, **kwargs):
         self.gb = list(copy.copy(gb))
         self.j = j
+        self.playtestStart = kwargs.get("playtestStart", None)
         self.errors = []
         self.regions = JSONDict({
             "ScreenTilesTable": {
@@ -454,6 +523,8 @@ class SaveContext:
                 "max": 0x6500 - 0x44C0 + 0x820,
                 "addr": rom.TILES4x4_BEGIN,
                 "bank": rom.BANK2,
+                "units": ("chunk",),
+                "unitdiv": 0x10,
             },
             # could combine the next four into one if we edit the accesses to their base addresses.
             "Entmisc": {
@@ -491,6 +562,8 @@ class SaveContext:
                 "max": 0x73F8 - 0x62B4 + 20 * 5,
                 "addr": j.screenTilesAddr,
                 "bank": rom.BANK6,
+                "units": ("screen",),
+                "unitdiv": 20,
             },
             "Layouts": {
                 "shortname": "L",
@@ -500,16 +573,31 @@ class SaveContext:
             },
             # this routine loads a screen (on cloud castle), so we need to modify it
             "EntC4Routine": {
-                "shortname": "C4",
+                "shortname": "CF",
                 "max": rom.ENT4C_FLICKER_ROUTINE_END - rom.ENT4C_FLICKER_ROUTINE,
                 "addr": rom.ENT4C_FLICKER_ROUTINE,
                 "bank": rom.ENT4C_FLICKER_ROUTINE_BANK,
-            }
+            },
+            # as above, but rock castle
+            "Ent78Routine": {
+                "shortname": "RF",
+                "max": rom.ENT78_FLICKER_ROUTINE_END - rom.ENT78_FLICKER_ROUTINE,
+                "addr": rom.ENT78_FLICKER_ROUTINE,
+                "bank": rom.ENT78_FLICKER_ROUTINE_BANK,
+            },
+            "CrusherRoutine": {
+                "shortname": "CR",
+                "max": rom.CRUSHER_ROUTINE_END - rom.CRUSHER_ROUTINE,
+                "addr": rom.CRUSHER_ROUTINE,
+                "bank": rom.CRUSHER_ROUTINE_BANK,
+            },
         })
         for key in self.regions.keys():
             self.regions[key] = JSONDict(self.regions[key])
             self.regions[key].key = key
+            self.regions[key].name = key
             self.regions[key].used = 0
+            self.regions[key].subranges = JSONDict()
         
         # maps (level, sublevel) -> list[(x, y, l)]
         self.uniqueScreens = dict()
@@ -537,6 +625,11 @@ class SaveContext:
             raise Exception(f"Address {addr:04X} out of bounds for bank {bank:X}")
         return bank * 0x4000 + addr % 0x4000
     
+    def writeBytes(self, bank, addr, bl):
+        for b in bl:
+            self.writeByte(bank, addr, b)
+            addr += 1
+    
     def writeByte(self, bank, addr, v):
         if type(v) != int or v < 0 or v >= 0x100:
             raise Exception(f"Error with value {v}")
@@ -562,9 +655,9 @@ class SaveContext:
 # returns:
 #  - a list of (regionname, size, maxsize)
 #  - a list of errors, or empty if successful
-def saveRom(gb, j, path=None):
+def saveRom(gb, j, path=None, **kwargs):
     assert(len(gb) > 0 and len(gb) % 0x4000 == 0)
-    ctx = SaveContext(gb, j)
+    ctx = SaveContext(gb, j, **kwargs)
     
     _saveRom(ctx)
     regions, errors, gb = ctx.result
@@ -587,10 +680,13 @@ def _saveRom(ctx: SaveContext):
             m = ctx.regions[key].max
             if c > m:
                 ctx.errors.append(f"Region \"{key}\" exceeded ({c:04X} > {m:04X} bytes)")
-        ctx.result = [(key, ctx.regions[key].used, ctx.regions[key].max) for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
+        ctx.result = [ctx.regions[key] for key in ctx.regions.keys()], ctx.errors, bytes(ctx.gb)
     except Exception as e:
         errors = [f"Fatal: {e}\n{traceback.format_exc()}"]
-        regions = [(key, None, ctx.regions[key]["max"]) for key in ctx.regions.keys()]
+        for key, region in ctx.regions.items():
+            region.used = None
+            region.subranges = {}
+        regions = [ctx.regions[key] for key in ctx.regions.keys()]
         ctx.result = regions, errors, None
     
 def writeRom(ctx: SaveContext):
@@ -602,14 +698,29 @@ def writeRom(ctx: SaveContext):
     writeSublevelVertical(ctx)
     writeEntities(ctx)
     writeChunks(ctx)
-    writeEntC4Routine(ctx)
+    
+    if ctx.playtestStart is not None:
+        writePlaytestStart(ctx, *ctx.playtestStart)
     
     # this one reads some of the screenTiles from before
     writeSublevelInitRoutines(ctx)
     
+    writeEntLoadRoutine(ctx, ctx.regions.EntC4Routine, ctx.j.entC4Routine, label="EntC4")
+    writeEntLoadRoutine(ctx, ctx.regions.Ent78Routine, ctx.j.ent78Routine, False, label="Ent78")
+    writeEntLoadRoutine(ctx, ctx.regions.CrusherRoutine, ctx.j.crusherRoutine, False, label="Crusher")
+    
     # do this one last, it's an opportunist
     writeLoadEnclosedScreenEntityBugfixPatch(ctx)
     
+    writeLoadLayoutPatch(ctx)
+
+# basically just for cloud castle flicker preview at door to final sublevel
+def requiresVerticalPreview(jsl):
+        for routine in jsl.initRoutines:
+            if routine.type == "SCREEN" and routine.dstAddr == 0x9A00:
+                return True
+        return False
+
 def constructScreenRemapping(ctx: SaveContext):
     for i, jl in enumerate(ctx.j.levels):
         if i > 0:
@@ -671,6 +782,8 @@ def constructScreenRemappingForSublevel(ctx: SaveContext, level: int, sublevel: 
             # TODO: we can do slightly better by figuring out which of (x-1,y) and (x+1,y) is relevant,
             # given direction previous sublevel exits.
             if (jsl.startx, jsl.starty) in [(x-1, y), (x+1, y)]:
+                priority -= 1
+            elif (jsl.startx, jsl.starty) in [(x, y-1), (x+1, y)] and requiresVerticalPreview(jsl):
                 priority -= 1
         return priority
     
@@ -749,9 +862,9 @@ def writeScreenTiles(ctx: SaveContext):
     taddr = ctx.regions.ScreenTilesTable.addr
     bank = ctx.regions.ScreenTiles.bank
     addr = ctx.regions.ScreenTiles.addr
+    subranges = ctx.regions.ScreenTiles.subranges
     
     tsaddr = taddr + len(ctx.j.levels)*2
-    
     for level, jl in enumerate(ctx.j.levels):
         if level == 0:
             taddr += 2
@@ -759,6 +872,8 @@ def writeScreenTiles(ctx: SaveContext):
             ctx.writeWord(tbank, taddr, tsaddr)
             taddr += 2
             for sublevel, jsl in enumerate(jl.sublevels):
+                subrangekey = f"{jl.name}-{sublevel+1}"
+                subranges[subrangekey] = JSONDict(start=addr)
                 ctx.writeWord(tbank, tsaddr, addr)
                 tsaddr += 2
                 for uscreen, uscm in enumerate(ctx.uniqueScreens[(level, sublevel)]):
@@ -768,6 +883,7 @@ def writeScreenTiles(ctx: SaveContext):
                             # TODO: remap chunks also :)
                             ctx.writeByte(bank, addr, js.data[y][x])
                             addr += 1
+                subranges[subrangekey].end = addr
     ctx.regions.ScreenTilesTable.used = tsaddr - ctx.regions.ScreenTilesTable.addr
     ctx.regions.ScreenTiles.used = addr - ctx.regions.ScreenTiles.addr
 
@@ -833,19 +949,22 @@ def constructRemappedLayout(ctx: SaveContext, level, sublevel, preview=False):
                             ctx.errors += "Sublevel door on final sublevel of {jl.name}"
                         else:
                             jsl2 = jl.sublevels[sublevel+1]
+                            previewDown = 1 if requiresVerticalPreview(jsl2) else 0
                             for i in range(2):
-                                key = (level, sublevel+1, jsl2.startx + xoff*i, jsl2.starty)
-                                nextsublevelscreen = ctx.screenRemap[key] if key in ctx.screenRemap else None
-                                if nextsublevelscreen is not None:
-                                    #print(level, sublevel, f"{nextsublevelscreen:02X}", len(ctx.uniqueScreens[(level, sublevel)]))
-                                    nextsublevelscreent = (nextsublevelscreen & 0x0F) + len(ctx.uniqueScreens[(level, sublevel)])
-                                    if nextsublevelscreent >= 0x10:
-                                        ctx.errors += [f"{rom.LEVELS[level]}-{sublevel+1} uses more than 15 unique screens when including preview screens for {rom.LEVELS[level]}-{sublevel+2}"]
-                                    _x = (x + xoff*(i+1) + 0x10) % 0x10
-                                    if layout[_x][y] > 0:
-                                        ctx.errors += [f"Unable to place next-sublevel-preview screen for {rom.LEVELS[level]}-{sublevel+1}, as it is coincident with an existing screen."]
-                                    else:
-                                        layout[_x][y] = nextsublevelscreent | 0x80
+                                for j in range(1 + previewDown):
+                                    key = (level, sublevel+1, jsl2.startx + xoff*i, jsl2.starty + j)
+                                    nextsublevelscreen = ctx.screenRemap[key] if key in ctx.screenRemap else None
+                                    if nextsublevelscreen is not None:
+                                        #print(level, sublevel, f"{nextsublevelscreen:02X}", len(ctx.uniqueScreens[(level, sublevel)]))
+                                        nextsublevelscreent = (nextsublevelscreen & 0x0F) + len(ctx.uniqueScreens[(level, sublevel)])
+                                        if nextsublevelscreent >= 0x10:
+                                            ctx.errors += [f"{rom.LEVELS[level]}-{sublevel+1} uses more than 15 unique screens when including preview screens for {rom.LEVELS[level]}-{sublevel+2}"]
+                                        _x = (x + xoff*(i+1) + 0x10) % 0x10
+                                        _y = (y + j + 0x10) % 0x10
+                                        if layout[_x][_y] > 0:
+                                            ctx.errors += [f"Unable to place next-sublevel-preview screen for {rom.LEVELS[level]}-{sublevel+1}, as it is coincident with an existing screen."]
+                                        else:
+                                            layout[_x][_y] = nextsublevelscreent | 0x80
     return layout
                 
 def produceScreenLayoutPackets(ctx: SaveContext, level, sublevel, addr):
@@ -915,7 +1034,8 @@ def produceScreenLayoutPackets(ctx: SaveContext, level, sublevel, addr):
         packets.append([
             # write address
             startx | (starty << 4),
-            0xDD,
+            # the usual routine requires this always-the-same byte. But we patch the ROM so it isn't required anymore.
+            #0xDD,
             
             stride,
             *entries,
@@ -1200,17 +1320,16 @@ def produceEntityPackets(ctx: SaveContext, level, sublevel, cat, addr):
     if len(packets) == 0:
         return data
         
-    startWithTerm = any([len(packet.data) == 0 for packet in packets])
+    #startWithTerm = any([len(packet.data) == 0 for packet in packets])
     
     for i, packet in enumerate(packets):
         if len(packet.data) == 0:
             # we'll come back to this
             # reuse previous idx
-            assert startWithTerm
-            packetStartByIdx[i] = 0
-            packetEndByIdx[i] = 0
+            packetStartByIdx[i] = None
+            packetEndByIdx[i] = None
         else:
-            if len(data) > 0 or packet.condensed or startWithTerm:
+            if len(data) > 0 or packet.condensed:
                 data.append(0xFE if packet.condensed else 0xFF)
             packetStartByIdx[i] = len(data)
             data.extend(packet.data)
@@ -1231,6 +1350,12 @@ def produceEntityPackets(ctx: SaveContext, level, sublevel, cat, addr):
         seckey = (x, y)
         assert seckey in enterablekeys
         i = enterablekeys[seckey]
+        if packetStartByIdx[i] == None or packetEndByIdx[i] == None:
+            ctx.enterableScreenData[key] = JSONDict({
+                "seclength": 0,
+            })
+            continue
+        
         offset = screenPacketOffset[(x, y)]
         condensed = layout[x][y] >> 4 == 0xB
         entsize = 4 if condensed else 6
@@ -1291,6 +1416,63 @@ def produceEntityLookupPackets(ctx: SaveContext, level, sublevel, addr):
                     data.append(edata.eaddr >> 8)
 
     return data
+
+def writePlaytestStart(ctx: SaveContext, level, sublevel=0):
+    data = [
+        0xCD, *word(rom.LEVEL_START_2855), #call 2855
+        0x21, *word(0xC8C0), # ld hl, $c8c0
+        0x36, level, #ld (hl), level
+        0x23, #hl++
+        0x36, sublevel, #ld (hl), sublevel
+        0xCD, *word(rom.LEVEL_START_28DB), #call 28db
+        0x3E, 4, #lda 4
+        0xCD, *word(rom.LEVEL_START_0578), #call 578
+    ]
+    
+    if sublevel > 0 and rom.ENTGFXLOAD is not None:
+        # copy next-area-graphics-loading routine wholesale.
+        startcopy = rom.ENTGFXLOAD + 5
+        endcopy = startcopy
+        for i in range(2):
+            while ctx.readByte(rom.ENTGFXLOAD_BANK, endcopy) != 0xEF:
+                endcopy += 1
+            endcopy += 1
+        endcopy += 3
+        
+        data2 = []
+        for i in range(startcopy, endcopy):
+            data2 += [ctx.readByte(rom.ENTGFXLOAD_BANK, i)]
+        
+        # load one routine earlier, since we're not decementing C8C1 for this.
+        assert data2[0] == 0x21 # ld hl, ...
+        data2[2] -= 2
+        if data2[2] < 0:
+            data2[2] += 0x100
+            data2[1] -= 1
+        data += data2
+        
+        data += [
+            0x21, *word(0xCACB), #ld hl, $CACB
+            0xCB, 0xFE # set 7, (hl)
+        ]
+        
+        detour_from = rom.LOADGFX_DETOUR+1
+        detour_to = ctx.readWord(rom.LOADGFX_DETOUR_BANK, detour_from)
+        detour_tramp = 0x3FF1
+        ctx.writeWord(rom.LOADGFX_DETOUR_BANK, detour_from, detour_tramp)
+        
+        data2 = [
+            0x21, *word(0xCACB),
+            0x7E, #ld a, (hl)
+            0x87, # add a, a
+            0xD2, *word(detour_to), # jp nc, ...
+            0xCB, 0xBE, # res 7, (hl)
+            0xD8, # ret
+        ]
+        ctx.writeBytes(0, detour_tramp, data2)
+    
+    data += [0xC9]
+    ctx.writeBytes(0, rom.TITLE_DONEFADE, data)
 
 def writeChunks(ctx: SaveContext):
     tbank = ctx.regions.ChunkTable.bank
@@ -1484,16 +1666,16 @@ def makeSubroutineScanlineEffect(ctx, hunk, addr, effect, scanline):
     ctx.sublevelInitSubroutines[key] = addr
     return hunk + data, addr + len(data)
 
-def writeEntC4Routine(ctx):
-    region = ctx.regions.EntC4Routine
+def writeEntLoadRoutine(ctx, region, routines, ret=True, **kwargs):
     addr = region.addr
     bank = region.bank
+    label = kwargs.get("label", region.shortname)
     
     returned = [False]
     data = []
-    for routine in ctx.j.entC4Routine:
+    for routine in routines:
         def getRetOrCallOpcode():
-            if routine is ctx.j.entC4Routine[-1]:
+            if routine is routines[-1] and ret:
                 returned[0] = True
                 return 0xC3
             else:
@@ -1512,10 +1694,26 @@ def writeEntC4Routine(ctx):
                 0x01, routine.scanline, routine.effect, # ld bc, <effect><scanline>
                 getRetOrCallOpcode(), *word(rom.SET_SCANLINE_EFFECT), # jp SET_SCANLINE_EFFECT
             ]
-        elif routine.type == "SCREEN":
-            hl = routine.hl
+        elif routine.type == "LVLSCREEN":
+            assert len(routine.levels) == 2
+            hl = [ctx.readWord(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2 + 2*rlev.level) for rlev in routine.levels]
             bc = routine.dstAddr
-            de = getAddressForScreenOrAddScreen(ctx, routine)
+            de = [getAddressForScreenOrAddScreen(ctx, rlev, label=f"{label}-{rom.LEVELS[rlev.level]}") for rlev in routine.levels]
+            data += [
+                0x11, *word(de[0]), # ld de, ...
+                0x21, *word(hl[0]), # ld hl, ...
+                0xfa, *word(0xC8C0), #ld a, ($c8c0)
+                0xfe, routine.levels[1].level, # cp a, <level[1]>
+                0x20, 0x06, # br nz, +6
+                0x11, *word(de[1]), # ld de, ...
+                0x21, *word(hl[1]), # ld hl, ...
+                0x01, *word(bc), # ld bc, ...
+                getRetOrCallOpcode(), *word(rom.FARCALL_LOAD_SCREEN_TILES)
+            ]
+        elif routine.type == "SCREEN":
+            hl = ctx.readWord(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2 + 2*routine.level)
+            bc = routine.dstAddr
+            de = getAddressForScreenOrAddScreen(ctx, routine, label=label)
             data += [
                 0x01, *word(bc), # ld bc, ...
                 0x11, *word(de), # ld de, ...
@@ -1523,22 +1721,28 @@ def writeEntC4Routine(ctx):
                 getRetOrCallOpcode(), *word(rom.FARCALL_LOAD_SCREEN_TILES)
             ]
         elif routine.type == "UNKD802":
+            # this adds in a secret rope.
             data += [
                 0x3E, 0x1B, #ld a, $1b
                 0xEA, *word(0xD802), #ld (D802), a
-                0xEA, *word(0xD802), #ld (D822), a
+                0xEA, *word(0xD822), #ld (D822), a
             ]
         else:
             # we could do this, I'm just too lazy to write the bankswap code right now.
             raise Exception(f"routine {routine.type} unsupported for Entity C4")
     
     # return
-    if not returned[0] and len(data) != region.max:
+    if not returned[0] and len(data) != region.max and ret:
         data += [0xC9]
     
     for b in data:
         ctx.writeByte(bank, addr, b)
         addr += 1
+        
+    if not ret:
+        while addr < region.max + region.addr:
+            ctx.writeByte(bank, addr, 0) # nop
+            addr += 1
     
     region.used = addr - region.addr
     
@@ -1608,6 +1812,7 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
                     getRetOrCallOpcode(), *word(rom.BANKSWAP_ARBITRARY)
                 ]
         elif routine.type == "SCREEN":
+            assert routine.level == level
             hl = ctx.readWord(rom.BANK2, rom.LEVTAB_TILES4x4_BANK2 + 2*level)
             count = len(jsl.initRoutines[i:])
             if "SRLS" in ctx.sublevelInitSubroutines and all([routine.type == "SCREEN" for routine in jsl.initRoutines[i:]]) and count < 0x100:
@@ -1616,7 +1821,7 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
                     hunk += [count]
                 for scroutine in jsl.initRoutines[i:]:
                     bc = scroutine.dstAddr
-                    de = getAddressForScreenOrAddScreen(ctx, scroutine)
+                    de = getAddressForScreenOrAddScreen(ctx, scroutine, label=f"Init{jl.name}-{sublevel+1}r{i}")
                     hunk += word(bc)
                     hunk += word(de)
                     
@@ -1626,7 +1831,7 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
                     return hunk
             else:
                 bc = routine.dstAddr
-                de = getAddressForScreenOrAddScreen(ctx, routine)
+                de = getAddressForScreenOrAddScreen(ctx, routine, label=f"Init{jl.name}-{sublevel+1}r{i}")
                 hunk += [
                     0x01, *word(bc), # ld bc, ...
                     0x11, *word(de), # ld de, ...
@@ -1647,35 +1852,59 @@ def produceSublevelInitRoutine(ctx, level, sublevel, addr):
     else:
         return hunk
             
-def getAddressForScreenOrAddScreen(ctx: SaveContext, data):
+def getAddressForScreenOrAddScreen(ctx: SaveContext, data, **kwargs):
+    region = ctx.regions.ScreenTiles
+    bank = region.bank
+    addr = region.addr
+    
     if type(data) != list:
         assert "data" in data or "linkscreen" in data
         if "data" in data:
+            if "srcAddr" in data:
+                if data.srcAddr not in range(region.addr, region.addr+region.max):
+                    if data.data == [ctx.readByte(bank, data.srcAddr + i) for i in range(20)]:
+                        return data.srcAddr
             data = data.data
         else:
             level, sublevel, screen = data.linksceen
             data = ctx.levels[level].sublevel[sublevel].screens[screen]
-            
-    region = ctx.regions.ScreenTiles
-    bank = region.bank
-    addr = region.addr
+    
+    label = kwargs.get("label", "Unk" + hashlib.md5(bytes(data)).hexdigest()[:8])
+    
     dc = len(data)
     zdata = data[0]
     z2data = data[1]
-    for startaddr in range(addr, addr + region.used-len(data)):
+    for startaddr in range(addr, addr + region.used-len(data)+1):
         if ctx.readByte(bank, startaddr) == zdata:
             if ctx.readByte(bank, startaddr+1) == z2data:
                 if [ctx.readByte(bank, startaddr+i) for i in range(dc)] == data:
                     return startaddr
     else:
         if region.max - region.used < dc:
-            raise Exception("Need to insert extra screen, but not enough room in screen bank.")
+            ctx.errors += ["Need to insert extra screen, but not enough room in screen bank."]
+            region.used += dc
+            return 0
         else:
             addr = region.addr + region.used
             for i, d in enumerate(data):
                 ctx.writeByte(bank, i + addr, d)
+            while label in region.subranges:
+                label += "*"
+            region.subranges[label] = JSONDict(start=addr, end=addr+dc)
             region.used += dc
             return addr
+
+def writeLoadLayoutPatch(ctx: SaveContext):
+    bank = rom.BANK6
+    addr = rom.LOAD_LAYOUT_500B
+    ctx.writeBytes(bank, addr+2, [
+        0x16, 0xDD # ld d, $DD
+    ])
+    ctx.writeBytes(bank, addr+16, [
+        0x83, # add a, e
+        0x5F, # ld e, a
+        0x00, # nop
+    ])
 
 def writeLoadEnclosedScreenEntityBugfixPatch(ctx: SaveContext):
     # somehow, this routine seems bugged

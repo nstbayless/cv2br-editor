@@ -18,6 +18,15 @@ import threading
 import os
 import glob
 import json
+import tempfile
+
+PyBoyAvailable = False
+try:
+    from pyboy import PyBoy, WindowEvent
+    PyBoyAvailable = True
+except ImportError:
+    print("Warning: PyBoy not available.")
+    pass
 
 try:
     from ctypes import windll  # Only exists on Windows.
@@ -26,7 +35,7 @@ try:
 except ImportError:
     pass
 
-APPNAME = "RevEdit"
+APPNAME = f"RevEdit {model.VERSION_NAME}"
 IO_OPEN = 0
 IO_SAVE = 1
 IO_SAVEAS = 2
@@ -69,18 +78,45 @@ SCREENSCROLLNAMES_H = ["Free Scrolling", "Enclosed", "Left", "Right"]
 SCREENSCROLLNAMES_V = ["Free Scrolling", "Enclosed", "Top", "Bottom"]
 
 class UsageBar(QWidget):
-    def __init__(self, label=None):
+    def __init__(self, label=None, shortname=None):
         super().__init__()
         self.used = None
         self.max = None
         self.label = label
+        self.shortname = shortname
+        self.start = None
+        self.end = None
+        self.subranges = []
         self.setMinimumHeight(15)
         self.setMaximumHeight(40)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setMouseTracking(True)
+    
+    def getSubrangeColor(self, i, brightness=0.4, alpha=0.5):
+        i *= 1.1
+        cols = [(math.sin(i + j) + 1) / 2 for j in range(3)]
+        cols = [0xFF * brightness + (0xFF * (1-brightness)) * col for col in cols]
+        return QColor(*cols, 0xFF * alpha)
+        
+    def mouseMoveEvent(self, event):
+        hoverP = event.position().x() / self.width()
+        label = (self.shortname + " ") if self.shortname is not None else ""
+        text = f"{label}{self.bank:X}:[${self.start:04X}–${self.end:04X}]"
+        for key, subrange in self.subranges.items():
+            p0 = (subrange.start - self.start) / self.max
+            p1 = (subrange.end - self.start) / self.max
+            if hoverP >= p0 and hoverP < p1:
+                b = subrange.end - subrange.start
+                text += f" | {key} [${subrange.start:04X}–${subrange.end:04X}] = ${b:X} {plural(b, 'byte')}"
+                if "units" in self.region and b % self.region.unitdiv == 0:
+                    u = b // self.region.unitdiv
+                    text += f" ({u} {plural(u, *self.region.units)})"
+                break
+        self.setToolTip(text)
     
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
-        
         
         painter.setPen(Qt.NoPen)
         painter.fillRect(QRect(0, 0, w, h), Qt.black)
@@ -97,8 +133,16 @@ class UsageBar(QWidget):
             text += f"{self.used:X}/{self.max:X} ({self.used/self.max*100:2.2f}%)"
         else:
             text += "~"
-            pass 
+            pass
         
+        # subranges
+        for i, (key, subrange) in enumerate(self.subranges.items()):
+            color = self.getSubrangeColor(i)
+            p0 = (subrange.start - self.start) / self.max
+            p1 = (subrange.end - self.start) / self.max
+            painter.fillRect(math.floor(w*p0), 0, math.floor(w*p1) - math.floor(w*p0), h, color)
+        
+        # border
         pen = QPen(Qt.black)
         pen.setWidth(2)
         painter.setPen(pen)
@@ -843,6 +887,10 @@ class MainWindow(QMainWindow):
         self.actExport.triggered.connect(functools.partial(self.onFileIO, "rom", IO_SAVEAS))
         self.actExport.setShortcut(QKeySequence("ctrl+e"))
         
+        self.actPlaytest = QAction("&Playtest...", self)
+        self.actPlaytest.triggered.connect(self.onPlaytest)
+        self.actPlaytest.setShortcut(QKeySequence("ctrl+p"))
+        
         self.actUndo = QAction("&Undo", self)
         self.actUndo.triggered.connect(self.undo)
         self.actUndo.setShortcut(QKeySequence("Ctrl+z"))
@@ -863,6 +911,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.actSave)
         file_menu.addAction(self.actSaveAs)
         file_menu.addSeparator()
+        file_menu.addAction(self.actPlaytest)
         file_menu.addAction(self.actExport)
         
         edit_menu = menu.addMenu("&Edit")
@@ -1104,7 +1153,7 @@ class MainWindow(QMainWindow):
         self.updateUsageLabel()
         
         with self.usageLock:
-            if self.usageDirty == False and self.usageResult is not None and self.timeInSeconds() - self.usageCalcTime < 5:
+            if self.usageDirty == False and self.usageResult is not None and self.timeInSeconds() - self.usageCalcTime < 15:
                 return
             if self.usageCalc is None:
                 self.usageDirty = False
@@ -1448,21 +1497,26 @@ class MainWindow(QMainWindow):
             if self.usageResult is not self.prevUsageResult:
                 self.prevUsageResult = self.usageResult
                 regions = self.usageResult["regions"]
-                names = set([region[0] for region in regions])
+                names = set([region.name for region in regions])
                 if names != set(self.usageBars.keys()):
                     for key in self.usageBars.keys():
                         self.usageBarLayout.removeWidget(self.usageBars[key])
                         self.usageBars[key].deleteLater()
                     self.usageBars.clear()
-                    for regionname, used, max in regions:
-                        usageBar = UsageBar(regionname)
+                    for region in regions:
+                        usageBar = UsageBar(region.name, region.shortname)
                         self.usageBarLayout.addWidget(usageBar)
-                        self.usageBars[regionname] = usageBar
-                for name, used, max in regions:
-                    assert name in self.usageBars
-                    self.usageBars[name].used = used
-                    self.usageBars[name].max = max
-                    self.usageBars[name].update()
+                        self.usageBars[region.name] = usageBar
+                for region in regions:
+                    assert region.name in self.usageBars
+                    self.usageBars[region.name].region = region
+                    self.usageBars[region.name].start = region.addr
+                    self.usageBars[region.name].end = region.addr+region.max
+                    self.usageBars[region.name].bank = region.bank
+                    self.usageBars[region.name].used = region.used
+                    self.usageBars[region.name].max = region.max
+                    self.usageBars[region.name].subranges = region.subranges
+                    self.usageBars[region.name].update()
             
             text = "Usage"
             icon = self.emptyIcon
@@ -1642,6 +1696,33 @@ class MainWindow(QMainWindow):
                 selector.widgets[chunk].update()
                 selector.ensureWidgetVisible(selector.widgets[chunk])
     
+    def onPlaytest(self):
+        if not PyBoyAvailable:
+            QMessageBox.information(
+                self, 'Cannot start Emulator', f"PyBoy module not found."
+            )
+            return
+        
+        if rom.ROMTYPE not in ["us", "jp"]:
+            QMessageBox.information(
+                self, 'ROM type not supported', f"US/JP roms only."
+            )
+            return
+        
+        level, sublevel, screen = self.getLevel()
+        path = os.path.join(tempfile.gettempdir(), "revedit_test.gb")
+        result = self.onFileIOSync("rom", IO_SAVE, path, playtestStart=(level, sublevel))
+        if result is None:
+            with PyBoy(path) as pyboy:
+                frame = 0
+                while not pyboy.tick():
+                    frame += 1
+                    if frame in [100, 120, 200, 250, 300]:
+                        pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+                        pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
+                    pass
+            
+    
     # load = 0
     # save = 1
     # saveas = 2
@@ -1681,14 +1762,14 @@ class MainWindow(QMainWindow):
         else:
             self.onFileIOSync(target, mode, path)
     
-    def onFileIOSync(self, target, mode, path):
+    def onFileIOSync(self, target, mode, path, **kwargs):
         assert path is not None
         self.ioStore[target] = path
         
         if target == "rom":
-            assert mode == IO_SAVEAS
-            print("Exporting rom...")
-            _, errors = model.saveRom(self.rom, self.j, "hack.gb")
+            assert mode in [IO_SAVEAS, IO_SAVE]
+            print(f"Exporting rom to {path}")
+            _, errors = model.saveRom(self.rom, self.j, path, **kwargs)
             print("Done.")
             
             if len(errors) > 0:
@@ -1701,12 +1782,13 @@ class MainWindow(QMainWindow):
                     'Error exporting rom',
                     result
                 )
+                return -1
                 
-        elif target == "json":
+        elif target == "hack":
             if mode == IO_OPEN:
                 with open(path, "r") as f:
                     self.undoBuffer.clear()
-                    j = json.load(f)
+                    j = json.load(f, object_hook=model.JSONDict)
                     self.j = j
             elif mode in [IO_SAVE, IO_SAVEAS]:
                 with open(path, "w") as f:
