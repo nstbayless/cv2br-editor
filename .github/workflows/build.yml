@@ -31,10 +31,13 @@ jobs:
     - run: python3 -m pip install 'pyinstaller<5.6' -vvv
     - run: python3 -m pip install PySide6==6.2.4
     - run: python3 -m pip install 'PyBoy<1.5.6'
+    - run: python3 -m pip install "pysdl2-dll"
       
     # pyinstaller build
     - name: build with pyinstaller
-      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc" --hidden-import "pyboy" --hidden-import "ctypes"
+      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc" --hidden-import "pyboy" --hidden-import "ctypes"  --hidden-import "pyboy.pyboy" --hidden-import "pyboy.utils" --hidden-import "pyboy.core" --hidden-import "pyboy.core.mb" --noconfirm --hidden-import "pyboy.core.timer" --hidden-import "pyboy.core.cartridge" --hidden-import "pyboy.core.cartridge.cartridge" --hidden-import "pyboy.core.cartridge.rtc" --hidden-import "pyboy.core.cartridge.base_mbc" --hidden-import "pyboy.core.cartridge.mbc1" --hidden-import "pyboy.core.cartridge.mbc2" --hidden-import "pyboy.core.cartridge.mbc3" --hidden-import "pyboy.core.cartridge.mbc5" --hidden-import "pyboy.core.bootrom" --hidden-import "pyboy.core.ram" --hidden-import "pyboy.core.lcd" --hidden-import "ctypes" --hidden-import "pyboy.core.interaction" gb.py --hidden-import "pyboy.core.sound" --hidden-import "sdl2" --hidden-import "pyboy.core.cpu" --hidden-import "pyboy.core.opcodes" --hidden-import "pyboy.botsupport" --hidden-import "pyboy.botsupport.manager" --hidden-import "pyboy.botsupport.screen" 
+      env:
+        PYSDL2_DLL_PATH: "${{ env.Python_ROOT_DIR }}\lib\site-packages\sdl2dll\dll\"
       
     - run: move dist\\RevEdit RevEdit
     
