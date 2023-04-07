@@ -29,6 +29,7 @@ except ImportError:
     pass
 
 try:
+    # (incantation)
     from ctypes import windll  # Only exists on Windows.
     myappid = 'Rev.Ed.It.0'
     windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
