@@ -4,8 +4,8 @@ import copy
 import traceback
 import hashlib
 
-VERSION_INT=2023040515
-VERSION_NAME="v1.0"
+VERSION_INT=2023040516
+VERSION_NAME="v1.2"
 
 def flatten(l):
     a = []
