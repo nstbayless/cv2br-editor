@@ -1713,7 +1713,7 @@ class MainWindow(QMainWindow):
     def onAbout(self):
         text = f"Developed by NaOH in March 2023 (cc-by-nc-sa v3.0).\n\nCreative Commons Licensed — use this program for any non-commercial means however you like, but please credit the author. Source available at https://github.com/nstbayless/cv2br-editor\n\nSpecial thanks to Spriven."
         if PyBoyAvailable:
-            text += f"\n\nPyBoy v1.5.5 by Baekalfen. See 'PyBoy License' for details. PyBoy source available at https://github.com/Baekalfen/PyBoy"
+            text += f"\n\nPyBoy by Baekalfen. See 'PyBoy License' for details. PyBoy source available at https://github.com/Baekalfen/PyBoy"
         text += "\n\nPlease support Konami."
         QMessageBox.information(
             self,
@@ -1723,7 +1723,7 @@ class MainWindow(QMainWindow):
     
     def onAboutPyBoy(self):
         dialog = QDialog()
-        dialog.setWindowTitle("PyBoy v1.5.5 License")
+        dialog.setWindowTitle("PyBoy License")
         text = """
 GNU Lesser General Public License
 =================================
