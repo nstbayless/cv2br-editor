@@ -6,7 +6,7 @@
 
 Windows: [Download Stable](https://github.com/nstbayless/cv2br-editor/releases) | [Dev](https://github.com/nstbayless/cv2br-editor/actions/workflows/build.yml)
 
-Alternatively, clone this repo and run `python3 -m pip install PySide6 PyBoy && python3 ./gui.py`.
+Alternatively, clone this repo and run `python3 -m pip install PySide6 && python3 ./gui.py`.
 
 ## Data Extraction
 
