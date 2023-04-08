@@ -7,9 +7,9 @@ from PySide6.QtWidgets import \
     QToolBar, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, \
     QComboBox, QGridLayout, QScrollArea, QListWidget, QListWidgetItem, \
     QAbstractItemView, QSpinBox, QRadioButton, QButtonGroup, QPushButton, \
-    QCheckBox, QFrame, QStyle, QFileDialog, QMessageBox, QDialog
+    QCheckBox, QFrame, QStyle, QFileDialog, QMessageBox, QDialog, QLineEdit
 from PySide6.QtGui import QColor, QAction, QIcon, QPainter, QPen, QFont, QFontMetrics, QImage, QKeySequence, QPolygon
-from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint, QTimer
+from PySide6.QtCore import Qt, QAbstractListModel, QSize, QRect, QEvent, Slot, QPoint, QTimer, Signal
 import functools
 import copy
 import signal
@@ -19,14 +19,9 @@ import os
 import glob
 import json
 import tempfile
-
-PyBoyAvailable = False
-try:
-    from pyboy import PyBoy, WindowEvent
-    PyBoyAvailable = True
-except ImportError:
-    print("Warning: PyBoy not available.")
-    pass
+import subprocess
+import re
+import shutil
 
 try:
     # (incantation)
@@ -42,6 +37,16 @@ IO_OPEN = 0
 IO_SAVE = 1
 IO_SAVEAS = 2
 
+DEFAULT_EMUPATH = ""
+# find an emulator
+
+for emubase in ["bgb", "sameboy"]: # TODO: add some more, but make sure to check the command actually works verbatim! retroarch requires -L, for example.
+    for emu in [emubase, f"{emubase}.exe"]:
+        if shutil.which(emu):
+            DEFAULT_EMUPATH = emu
+            print("detected default emulator:", DEFAULT_EMUPATH)
+            break
+
 guipath = "."
 if getattr(sys, 'frozen', False):
     # If the application is run as a bundle, the PyInstaller bootloader
@@ -54,6 +59,13 @@ else:
 
 # allows PyQt to close with ctrl+C
 signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+def split_unquoted(text):
+    # This function implemented by ChatGPT
+    # Split text by spaces, but not those that are inside quotes
+    # Use negative lookbehind and lookahead assertions to split on spaces
+    # that are not inside quotes
+    return re.split(r'(?<!\\)\s+(?=(?:[^"]*"[^"]*")*[^"]*$)', text)
 
 def plural(i, singular, plural=None):
     if plural is None:
@@ -78,6 +90,47 @@ SCREENSCROLLS = {
 }
 SCREENSCROLLNAMES_H = ["Free Scrolling", "Enclosed", "Left", "Right"]
 SCREENSCROLLNAMES_V = ["Free Scrolling", "Enclosed", "Top", "Bottom"]
+
+class FilePathSelector(QWidget):
+    # This class implemented by ChatGPT
+    valueChanged = Signal(str)
+    
+    def __init__(self, value="", parent=None, label="Path:"):
+        super().__init__(parent)
+
+        self._path = value
+
+        self._path_label = QLabel(label)
+        self._path_edit = QLineEdit(self._path)
+        self._path_browse_button = QPushButton("Browse...")
+        self._path_browse_button.clicked.connect(self._on_browse_button_clicked)
+
+        layout = QHBoxLayout()
+        layout.addWidget(self._path_label)
+        layout.addWidget(self._path_edit)
+        layout.addWidget(self._path_browse_button)
+
+        self.setLayout(layout)
+
+        self._path_edit.textChanged.connect(self._on_text_changed)
+
+    @property
+    def path(self):
+        return self._path
+
+    def _on_text_changed(self, text):
+        self._path = text
+        self.valueChanged.emit(self._path)
+
+    def _on_browse_button_clicked(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        file_dialog = QFileDialog(self, "Select Emulator", options=options)
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+        if file_dialog.exec():
+            selected_files = file_dialog.selectedFiles()
+            if len(selected_files) > 0:
+                self._path_edit.setText(selected_files[0])
 
 class UsageBar(QWidget):
     def __init__(self, label=None, shortname=None):
@@ -822,6 +875,9 @@ class MainWindow(QMainWindow):
         self.undoBuffer = UndoBuffer(self, self.onUndoBuffer)
         self.ioStore = dict()
         self.vram = VRam(self.j, self.rom)
+        self.config = {
+            "emuPath": DEFAULT_EMUPATH
+        }
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
         self.sel_screen = {}
@@ -896,10 +952,6 @@ class MainWindow(QMainWindow):
         self.actAbout = QAction(f"&About {APPNAME_SMALL}", self)
         self.actAbout.triggered.connect(self.onAbout)
         
-        if PyBoyAvailable:
-            self.actPyBoyLicense = QAction("&PyBoy License", self)
-            self.actPyBoyLicense.triggered.connect(self.onAboutPyBoy)
-        
         self.actUndo = QAction("&Undo", self)
         self.actUndo.triggered.connect(self.undo)
         self.actUndo.setShortcut(QKeySequence("Ctrl+z"))
@@ -911,6 +963,9 @@ class MainWindow(QMainWindow):
         self.actRedo2.triggered.connect(self.redo)
         self.actRedo2.setShortcut(QKeySequence("ctrl+shift+z"))
         self.addAction(self.actRedo2)
+        
+        self.actConfigure = QAction("&Configure Emulator", self)
+        self.actConfigure.triggered.connect(self.onConfigure)
         
     def defineMenus(self):
         menu = self.menuBar()
@@ -926,12 +981,11 @@ class MainWindow(QMainWindow):
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(self.actUndo)
         edit_menu.addAction(self.actRedo)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.actConfigure)
         
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self.actAbout)
-        
-        if PyBoyAvailable:
-            help_menu.addAction(self.actPyBoyLicense)
         
     def defineTabs(self):
         self.tabs = QTabWidget()
@@ -1713,8 +1767,6 @@ class MainWindow(QMainWindow):
     
     def onAbout(self):
         text = f"Developed by NaOH in March 2023 (cc-by-nc-sa v3.0).\n\nCreative Commons Licensed — use this program for any non-commercial means however you like, but please credit the author. Source available at https://github.com/nstbayless/cv2br-editor\n\nSpecial thanks to Spriven."
-        if PyBoyAvailable:
-            text += f"\n\nPyBoy by Baekalfen. See 'PyBoy License' for details. PyBoy source available at https://github.com/Baekalfen/PyBoy"
         text += "\n\nPlease support Konami."
         QMessageBox.information(
             self,
@@ -1722,188 +1774,25 @@ class MainWindow(QMainWindow):
             text
         )
     
-    def onAboutPyBoy(self):
-        dialog = QDialog()
-        dialog.setWindowTitle("PyBoy License")
-        text = """
-GNU Lesser General Public License
-=================================
-
-_Version 3, 29 June 2007_
-_Copyright © 2007 Free Software Foundation, Inc. &lt;<http://fsf.org/>&gt;_
-
-Everyone is permitted to copy and distribute verbatim copies
-of this license document, but changing it is not allowed.
-
-
-This version of the GNU Lesser General Public License incorporates
-the terms and conditions of version 3 of the GNU General Public
-License, supplemented by the additional permissions listed below.
-
-### 0. Additional Definitions
-
-As used herein, “this License” refers to version 3 of the GNU Lesser
-General Public License, and the “GNU GPL” refers to version 3 of the GNU
-General Public License.
-
-“The Library” refers to a covered work governed by this License,
-other than an Application or a Combined Work as defined below.
-
-An “Application” is any work that makes use of an interface provided
-by the Library, but which is not otherwise based on the Library.
-Defining a subclass of a class defined by the Library is deemed a mode
-of using an interface provided by the Library.
-
-A “Combined Work” is a work produced by combining or linking an
-Application with the Library.  The particular version of the Library
-with which the Combined Work was made is also called the “Linked
-Version”.
-
-The “Minimal Corresponding Source” for a Combined Work means the
-Corresponding Source for the Combined Work, excluding any source code
-for portions of the Combined Work that, considered in isolation, are
-based on the Application, and not on the Linked Version.
-
-The “Corresponding Application Code” for a Combined Work means the
-object code and/or source code for the Application, including any data
-and utility programs needed for reproducing the Combined Work from the
-Application, but excluding the System Libraries of the Combined Work.
-
-### 1. Exception to Section 3 of the GNU GPL
-
-You may convey a covered work under sections 3 and 4 of this License
-without being bound by section 3 of the GNU GPL.
-
-### 2. Conveying Modified Versions
-
-If you modify a copy of the Library, and, in your modifications, a
-facility refers to a function or data to be supplied by an Application
-that uses the facility (other than as an argument passed when the
-facility is invoked), then you may convey a copy of the modified
-version:
-
-* **a)** under this License, provided that you make a good faith effort to
-ensure that, in the event an Application does not supply the
-function or data, the facility still operates, and performs
-whatever part of its purpose remains meaningful, or
-
-* **b)** under the GNU GPL, with none of the additional permissions of
-this License applicable to that copy.
-
-### 3. Object Code Incorporating Material from Library Header Files
-
-The object code form of an Application may incorporate material from
-a header file that is part of the Library.  You may convey such object
-code under terms of your choice, provided that, if the incorporated
-material is not limited to numerical parameters, data structure
-layouts and accessors, or small macros, inline functions and templates
-(ten or fewer lines in length), you do both of the following:
-
-* **a)** Give prominent notice with each copy of the object code that the
-Library is used in it and that the Library and its use are
-covered by this License.
-* **b)** Accompany the object code with a copy of the GNU GPL and this license
-document.
-
-### 4. Combined Works
-
-You may convey a Combined Work under terms of your choice that,
-taken together, effectively do not restrict modification of the
-portions of the Library contained in the Combined Work and reverse
-engineering for debugging such modifications, if you also do each of
-the following:
-
-* **a)** Give prominent notice with each copy of the Combined Work that
-the Library is used in it and that the Library and its use are
-covered by this License.
-
-* **b)** Accompany the Combined Work with a copy of the GNU GPL and this license
-document.
-
-* **c)** For a Combined Work that displays copyright notices during
-execution, include the copyright notice for the Library among
-these notices, as well as a reference directing the user to the
-copies of the GNU GPL and this license document.
-
-* **d)** Do one of the following:
-    - **0)** Convey the Minimal Corresponding Source under the terms of this
-License, and the Corresponding Application Code in a form
-suitable for, and under terms that permit, the user to
-recombine or relink the Application with a modified version of
-the Linked Version to produce a modified Combined Work, in the
-manner specified by section 6 of the GNU GPL for conveying
-Corresponding Source.
-    - **1)** Use a suitable shared library mechanism for linking with the
-Library.  A suitable mechanism is one that **(a)** uses at run time
-a copy of the Library already present on the user's computer
-system, and **(b)** will operate properly with a modified version
-of the Library that is interface-compatible with the Linked
-Version.
-
-* **e)** Provide Installation Information, but only if you would otherwise
-be required to provide such information under section 6 of the
-GNU GPL, and only to the extent that such information is
-necessary to install and execute a modified version of the
-Combined Work produced by recombining or relinking the
-Application with a modified version of the Linked Version. (If
-you use option **4d0**, the Installation Information must accompany
-the Minimal Corresponding Source and Corresponding Application
-Code. If you use option **4d1**, you must provide the Installation
-Information in the manner specified by section 6 of the GNU GPL
-for conveying Corresponding Source.)
-
-### 5. Combined Libraries
-
-You may place library facilities that are a work based on the
-Library side by side in a single library together with other library
-facilities that are not Applications and are not covered by this
-License, and convey such a combined library under terms of your
-choice, if you do both of the following:
-
-* **a)** Accompany the combined library with a copy of the same work based
-on the Library, uncombined with any other library facilities,
-conveyed under the terms of this License.
-* **b)** Give prominent notice with the combined library that part of it
-is a work based on the Library, and explaining where to find the
-accompanying uncombined form of the same work.
-
-### 6. Revised Versions of the GNU Lesser General Public License
-
-The Free Software Foundation may publish revised and/or new versions
-of the GNU Lesser General Public License from time to time. Such new
-versions will be similar in spirit to the present version, but may
-differ in detail to address new problems or concerns.
-
-Each version is given a distinguishing version number. If the
-Library as you received it specifies that a certain numbered version
-of the GNU Lesser General Public License “or any later version”
-applies to it, you have the option of following the terms and
-conditions either of that published version or of any later version
-published by the Free Software Foundation. If the Library as you
-received it does not specify a version number of the GNU Lesser
-General Public License, you may choose any version of the GNU Lesser
-General Public License ever published by the Free Software Foundation.
-
-If the Library as you received it specifies that a proxy can decide
-whether future versions of the GNU Lesser General Public License shall
-apply, that proxy's public statement of acceptance of any version is
-permanent authorization for you to choose that version for the
-Library.
-"""
-        scroll = QScrollArea(dialog)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setWidget(QLabel(text))
-        scroll.setWidgetResizable(True)
+    def onConfigure(self):
+        dialog = QDialog(self)
+        vlay = QVBoxLayout()
         
-        vlay = QVBoxLayout(dialog)
-        vlay.addWidget(scroll)
+        def onEmuPathChanged(value):
+            self.config["emuPath"] = value
+        
+        emuPath = FilePathSelector(self.config["emuPath"], dialog, "Emulator Path:")
+        emuPath.valueChanged.connect(onEmuPathChanged)
+        
+        vlay.addWidget(emuPath)
+        
         dialog.setLayout(vlay)
         dialog.exec()
     
     def onPlaytest(self):
-        if not PyBoyAvailable:
+        if self.config["emuPath"] == "":
             QMessageBox.information(
-                self, 'Cannot start Emulator', f"PyBoy module not found."
+                self, 'Cannot start Emulator', f"Please select an emulator via Edit -> {self.actConfigure.text().replace('&', '')}."
             )
             return
         
@@ -1927,16 +1816,9 @@ Library.
         path = os.path.join(tempfile.gettempdir(), "revedit_test.gb")
         result = self.onFileIOSync("rom", IO_SAVE, path, playtestStart=(level, sublevel))
         if result is None:
-            with PyBoy(path) as pyboy:
-                frame = 0
-                while not pyboy.tick():
-                    frame += 1
-                    if frame in [100, 120, 200, 250, 300]:
-                        pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-                        pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
-                    pass
+            command = split_unquoted(f"{self.config['emuPath']}") if '"' in self.config['emuPath'] else [self.config['emuPath']]
+            subprocess.Popen(command + [path])
             
-    
     # load = 0
     # save = 1
     # saveas = 2

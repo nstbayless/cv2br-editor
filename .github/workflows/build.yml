@@ -30,11 +30,10 @@ jobs:
     - run: python3 -m pip install setuptools==50.3.2
     - run: python3 -m pip install 'pyinstaller<5.6' -vvv
     - run: python3 -m pip install PySide6==6.2.4
-    - run: python3 -m pip install 'PyBoy<1.5.6'
       
     # pyinstaller build
     - name: build with pyinstaller
-      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc" --hidden-import "pyboy" --hidden-import "ctypes"
+      run: pyinstaller gui.py -n RevEdit --windowed -i "etc/icon.ico" --paths=. --add-data="etc/icon.png;etc" --add-data="etc/entenemies.png;etc" --add-data="etc/entmisc.png;etc" --add-data="etc/entitems.png;etc" --hidden-import "ctypes"
       
     - run: move dist\\RevEdit RevEdit
     
