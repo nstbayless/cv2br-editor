@@ -1,4 +1,4 @@
-# Castlevania II: Belmont's Revenge: Editor & Data Extraction Scripts (data extraction)
+# Castlevania II: Belmont's Revenge: Editor & Data Extraction Scripts
 
 ## Editor
 
