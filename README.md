@@ -2,7 +2,7 @@
 
 ## Editor
 
-![Screenshot 0](./etc/screenshot-0.png) &nbsp;&nbsp;&nbsp; ![Screenshot 1](./etc/screenshot-1.png)
+![Screenshot 0](./etc/screenshot-0.png) ![Screenshot 1](./etc/screenshot-1.png)
 
 Windows: [Download Stable](https://github.com/nstbayless/cv2br-editor/releases) | [Dev](https://github.com/nstbayless/cv2br-editor/actions/workflows/build.yml)
 
