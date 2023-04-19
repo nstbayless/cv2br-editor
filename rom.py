@@ -5,6 +5,12 @@ def romaddr(bank, addr):
     
 def readbyte(bank, addr):
     return data[romaddr(bank, addr)]
+
+def readSignedByte(bank, addr):
+    v = data[romaddr(bank, addr)]
+    if v >= 0x80:
+        v -= 0x100
+    return v
     
 def readword(bank, addr, littleEndian=True):
     if littleEndian:
@@ -392,6 +398,10 @@ def readrom(_data):
     global LOADGFX_DETOUR
     LOADGFX_DETOUR_BANK = 3
     LOADGFX_DETOUR = 0x7664
+    global SUBLEVEL_TILES_PATCH_TABLE
+    SUBLEVEL_TILES_PATCH_TABLE = 0x3382 # TODO: localized
+    global TILES_PATCH_LIST
+    TILES_PATCH_LIST = 0x3401 # TODO: localized
 
     # bank2
     global BANK2
@@ -426,6 +436,10 @@ def readrom(_data):
     global VRAM_SPECIAL_ROUTINES_END
     VRAM_SPECIAL_ROUTINES=0x768e
     VRAM_SPECIAL_ROUTINES_END=0x7768
+    global SPRITE_PATCH_TABLE
+    global LOAD_SPRITES_ROUTINES
+    SPRITE_PATCH_TABLE = 0x7059 # TODO: localized
+    LOAD_SPRITES_ROUTINES = 0x6fef # TODO: localized
 
     # bank6
     global BANK6

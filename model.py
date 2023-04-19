@@ -4,7 +4,7 @@ import copy
 import traceback
 import hashlib
 
-VERSION_INT=2023040811
+VERSION_INT=2023041819
 VERSION_NAME="v1.3"
 
 def flatten(l):
@@ -42,6 +42,7 @@ class JSONDict(dict):
         super().__init__(*args)
         for key, value in kwargs.items():
             self[key] = value
+            
     # This class implemented by ChatGPT
     # WARNING! some attributes are overshadowed by native dict attributes
     # for example, you can't access groove.values directly, must do groove["values"].
@@ -60,6 +61,8 @@ class JSONDict(dict):
             setattr(dict, attr, value)
         else:
             self[attr] = value
+    
+    
 
 # returns a pair: gb: bytes, data: JSONDict
 def loadRom(path):
@@ -89,10 +92,100 @@ def loadRom(path):
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
                     loadSublevelInitRoutine(j, i, sublevel)
+                    loadSublevelSpritesPatch(j, i, sublevel)
+                    if sublevel >= 1:
+                        loadSublevelTilesPatch(j, i, sublevel)
         j.entC4Routine = loadInitRoutine(j, rom.ENT4C_FLICKER_ROUTINE_BANK, rom.ENT4C_FLICKER_ROUTINE, maxAddr = rom.ENT4C_FLICKER_ROUTINE_END)
         j.ent78Routine = loadInitRoutine(j, rom.ENT78_FLICKER_ROUTINE_BANK, rom.ENT78_FLICKER_ROUTINE, maxaddr=rom.ENT78_FLICKER_ROUTINE_END)
         j.crusherRoutine = loadInitRoutine(j, rom.CRUSHER_ROUTINE_BANK, rom.CRUSHER_ROUTINE, maxaddr=rom.CRUSHER_ROUTINE_END)
         return rom.data, j
+
+# returns a json object for the sprite located at the given address
+# also returns the address of the end of the sprite
+def readSprite(bank, addr):
+    jsprite = JSONDict({
+        "tileCount": rom.readbyte(bank, addr),
+        "tiles": []
+    })
+    addr += 1
+    for t in range(jsprite.tileCount):
+        jtile = JSONDict()
+        jsprite.tiles.append(jtile)
+        jtile.yoff = rom.readSignedByte(bank, addr)
+        addr += 1
+        jtile.xoff = rom.readSignedByte(bank, addr)
+        addr += 1
+        jtile.tidx = rom.readbyte(bank, addr)
+        addr += 1
+        if jtile.tidx & 1 == 1:
+            jtile.tidx &= ~1
+            jtile.flags = rom.readbyte(bank, addr)
+            addr += 1
+    return jsprite, addr
+
+def loadSublevelTilesPatch(j, level, sublevel):
+    assert sublevel >= 1, "sublevel 0 does not patch tiles"
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    bank = 0
+    addr = readtableword(bank, rom.SUBLEVEL_TILES_PATCH_TABLE, level, sublevel-1)
+    jsl.tilePatches = []
+    count = rom.readbyte(bank, addr)
+    addr += 1
+    for i in range(count):
+        jpatch = JSONDict()
+        idx = rom.readbyte(bank, addr + i)
+        patchaddr = idx + rom.TILES_PATCH_LIST
+        jpatch.count = rom.readbyte(bank, patchaddr)
+        jpatch.bank = rom.readbyte(bank, patchaddr+1)
+        jpatch.source = rom.readword(bank, patchaddr+2)
+        jpatch.dst = rom.readword(bank, patchaddr+4)
+        jsl.tilePatches.append(jpatch)
+
+# each sublevel edits/patches a portion of the sprite lookup table, which is at $DF00-$DFFF in WRAM.
+def loadSublevelSpritesPatch(j, level, sublevel):
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    bank = rom.BANK3
+    patchstructaddr = readtableword(bank, rom.SPRITE_PATCH_TABLE, level) + 4*sublevel
+    count = rom.readbyte(bank, patchstructaddr)
+    start = rom.readbyte(bank, patchstructaddr+1)
+    source = rom.readword(bank, patchstructaddr+2)
+    if count != 0:
+        jsl.spritePatch = JSONDict({
+            "startidx": start,
+            "sprites": []
+        })
+        for i in range(count):
+            ptr = rom.readword(bank, source + 2*i)
+            sprite, end = readSprite(bank, ptr)
+            jsl.spritePatch.sprites.append(sprite)
+
+def readSpritePatchRoutine(bank, addr):
+    jpatch = JSONDict()
+    # ld hl, xxxx
+    source = rom.readword(bank, addr+1)
+    addr += 3
+    
+    # ld a, xx
+    start = rom.readbyte(bank, addr+1)
+    addr += 2
+    
+    # ld b, xx
+    count = rom.readbyte(bank, addr+1)
+    
+    # (jr $7048)
+    return jpatch
+    
+def loadGlobalSpritePatches(j):
+    bank = rom.BANK3
+    addr = rom.LOAD_SPRITES_ROUTINES
+    j.globalSpritePatches = JSONDict({
+        "init": readSpritePatchRoutine(bank, addr),
+        "title": readSpritePatchRoutine(bank, addr+9),
+        "unk2": readSpritePatchRoutine(bank, addr+18),
+        "unk3": readSpritePatchRoutine(bank, addr+27),
+    })
 
 def loadSublevelInitRoutine(j, level, sublevel):
     jl = j.levels[level]

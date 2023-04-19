@@ -316,8 +316,8 @@ class VRam:
             for i in range(entry.destlen // 0x10):
                 self.loadVramTile(destaddr + i * 0x10, srcaddr + i * 0x10, entry.srcbank)
         
-    def loadVramForStage(self, level):
-        desc = f"l{level}"
+    def loadVramForStage(self, level, sublevel=0):
+        desc = f"l{level}s{sublevel}"
         if self.cached_vram_descriptor == desc:
             return
         self.cached_vram_descriptor = desc
@@ -330,6 +330,10 @@ class VRam:
         
         self.loadVramFromBuffer(self.j.tileset_common)
         self.loadVramFromBuffer(self.j.levels[level].tileset)
+        for jsl in self.j.levels[level].sublevels[1:sublevel+1]:
+            for tilePatch in jsl.tilePatches:
+                for i in range(tilePatch.count):
+                    self.loadVramTile(tilePatch.dst + 0x10 * i, tilePatch.source + i * 0x10, tilePatch.bank)
 
 def paintTile(painter, vram, x, y, tileidx, scale):
     x2 = x + scale * 8
@@ -401,7 +405,7 @@ class ChunkWidget(QWidget):
         painter = QPainter(self)
         level, sublevel, screen = self.app.getLevel()
         vram = self.app.vram
-        vram.loadVramForStage(level)
+        vram.loadVramForStage(level, sublevel)
         chunks = model.getLevelChunks(self.app.j, level)
         if self.id >= len(chunks):
             painter.fillRect(QRect(0, 0, 8*4*self.scale, 8*4*self.scale), QColor(128, 128, 128))
@@ -659,7 +663,7 @@ class ScreenWidget(QWidget):
         chunks = model.getLevelChunks(self.app.j, level)
         
         vram = self.app.vram
-        vram.loadVramForStage(level)
+        vram.loadVramForStage(level, sublevel)
         
         for i in range(5):
             for j in range(4):
@@ -1831,6 +1835,11 @@ class MainWindow(QMainWindow):
             "hack": f"{verb} a hack file"
         }
         
+        DEXT = {
+            "rom": ".gb",
+            "hack": ".json",
+        }
+        
         DFILT = {
             "rom": "ROM files (*.gb *.gbc *.bin)",
             "hack": "Hack files (*.json)"
@@ -1853,13 +1862,17 @@ class MainWindow(QMainWindow):
             options |= QFileDialog.DontUseNativeDialog
             file_dialog = QFileDialog(self, DMESG[target], "", DFILT[target], options=options)
             file_dialog.setAcceptMode(QFileDialog.AcceptOpen if mode == IO_OPEN else QFileDialog.AcceptSave)
-            file_dialog.fileSelected.connect(lambda path: self.onFileIOSync(target, mode, path) if path is not None else None)
+            file_dialog.fileSelected.connect(lambda path: self.onFileIOSync(target, mode, path, defaultExtension=DEXT[target]) if path is not None else None)
             file_dialog.show()
         else:
             self.onFileIOSync(target, mode, path)
     
     def onFileIOSync(self, target, mode, path, **kwargs):
         assert path is not None
+        
+        if os.path.splitext(path)[1] == "":
+            path += kwargs.get("defaultExtension", "")
+        
         self.ioStore[target] = path
         
         if target == "rom":
