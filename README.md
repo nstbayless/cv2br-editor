@@ -17,3 +17,7 @@ Supported roms: us/eu, jp, kgb4ceu
 python3.8 is requied to run the script.
 
 (Optional): z80-asm is required to assemble the resulting data.
+
+## License
+
+cc-by-nc-sa v3.0

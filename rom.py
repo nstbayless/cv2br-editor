@@ -381,6 +381,8 @@ def readrom(_data):
     global ENTGFXLOAD_BANK
     ENTGFXLOAD_BANK = 0
     ENTGFXLOAD = 0x0e4c
+    global SUB0_TILE_PATCH
+    SUB0_TILE_PATCH = 0x2b28
     
     global LEVEL_START_2855
     global LEVEL_START_28DB
@@ -440,6 +442,8 @@ def readrom(_data):
     global LOAD_SPRITES_ROUTINES
     SPRITE_PATCH_TABLE = 0x7059 # TODO: localized
     LOAD_SPRITES_ROUTINES = 0x6fef # TODO: localized
+    global LEVEL_TIMER_TABLE
+    LEVEL_TIMER_TABLE = 0x77f0 # TODO: localized
 
     # bank6
     global BANK6

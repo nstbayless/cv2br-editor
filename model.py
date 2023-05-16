@@ -89,6 +89,7 @@ def loadRom(path):
                     jsl = JSONDict()
                     jl.sublevels.append(jsl)
                     loadSublevelScreens(j, i, sublevel)
+                    loadSublevelTimer(j, i, sublevel);
                     loadSublevelScreenTable(j, i, sublevel)
                     loadSublevelScreenEntities(j, i, sublevel)
                     loadSublevelInitRoutine(j, i, sublevel)
@@ -581,6 +582,13 @@ def getScreenEnterable(j, level, sublevel, x, y):
 
 def getEnterabilityLayout(j, level, sublevel):
     return [[getScreenEnterable(j, level, sublevel, x, y) for y in range(16)] for x in range(16)]
+
+def loadSublevelTimer(j, level, sublevel):
+    jl = j.levels[level]
+    jsl = jl.sublevels[sublevel]
+    levelTimerPointer = rom.readword(rom.BANK3, rom.LEVEL_TIMER_TABLE + level*2) # fetch timer table of the level
+    levelTimerPointerData = rom.readbyte(rom.BANK3, levelTimerPointer + sublevel) # fetch sublevel timer value
+    jsl.timer = levelTimerPointerData
 
 # ------------------------------------------------------
 

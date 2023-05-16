@@ -279,6 +279,8 @@ class VRam:
         self.cached_vram_descriptor = None
         
     def getVramBGTile(self, tileidx):
+        if tileidx > 0x80:
+            return self.tileset[tileidx]
         return self.tileset[0x100 + tileidx]
         
     def loadVramTile(self, destaddr, srcaddr, srcbank):
@@ -558,8 +560,9 @@ class TileSelectorWidget(QWidget):
             painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
 class SelectorPanel(QScrollArea):
-    def __init__(self, parent, type=ChunkSelectorWidget, scale=2, w=4, h=0x40):
+    def __init__(self, parent, type=ChunkSelectorWidget, scale=2, w=4, h=0x40, **kwargs):
         super().__init__()
+        self.idxremap = kwargs.get("idxremap", lambda x: x)
         self.app = parent
         self.scale = scale
         self.w = w
@@ -567,14 +570,15 @@ class SelectorPanel(QScrollArea):
         self.type = type
         self.margin = 4
         self.spacing = 3
-        self.widgets = []
+        self.widgets = dict()
         grid_layout = QGridLayout()
         grid_layout.setSpacing(self.spacing)
         grid_layout.setContentsMargins(self.margin, self.margin, self.margin, self.margin)
         for j in range(self.h):
             for i in range(self.w):
-                self.widgets.append(type(i + j * self.w, self.app, self.scale))
-                grid_layout.addWidget(self.widgets[-1], j, i)
+                id = self.idxremap(i + j * self.w)
+                self.widgets[id] = type(id, self.app, self.scale)
+                grid_layout.addWidget(self.widgets[id], j, i)
         
         scroll_area_widget = QWidget()
         scroll_area_widget.setLayout(grid_layout)
@@ -1277,7 +1281,7 @@ class MainWindow(QMainWindow):
         hlay.addWidget(QWidget())
         
         # tile selector
-        self.tileSelectors.append(SelectorPanel(self, TileSelectorWidget, 4, 0x4, 0x20))
+        self.tileSelectors.append(SelectorPanel(self, TileSelectorWidget, 4, 0x4, 0x24, idxremap=lambda x: x if x < 0x80 else x+0x70))
         hlay.addWidget(self.tileSelectors[-1])
     
     # depth=0: level only
@@ -1679,7 +1683,7 @@ class MainWindow(QMainWindow):
                 qcb.blockSignals(False)
         
         for selector in self.chunkSelectors + self.tileSelectors:
-            for widget in selector.widgets:
+            for id, widget in selector.widgets.items():
                 widget.update()
         
         self.chunkEdit.update()
