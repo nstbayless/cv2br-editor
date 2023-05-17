@@ -292,10 +292,12 @@ class VRam:
     def getVramSpriteTile(self, tileidx, flip=0):
         return self.spritetileset[flip][tileidx]
         
-    def loadVramTile(self, destaddr, srcaddr, srcbank):
+    def loadVramTile(self, destaddr, srcaddr, srcbank, loadSprites):
         # create an 8x8 QImage with Format_RGB32
-        image = QImage(QSize(8, 8), QImage.Format_RGB32)
-        aimage = [QImage(QSize(8, 16), QImage.Format_ARGB32) for i in range(4)]
+        if loadSprites:
+            aimage = [QImage(QSize(8, 16), QImage.Format_ARGB32) for i in range(4)]
+        else:
+            image = QImage(QSize(8, 8), QImage.Format_RGB32)
         
         destaddr -= 0x8000
         destaddr //= 0x10
@@ -309,17 +311,19 @@ class VRam:
             for x in range(8):
                 c1 = (b1 >> (7-x)) & 1
                 c2 = (b2 >> (7-x)) & 1
-                if y < 8:
+                if y < 8 and not loadSprites:
                     image.setPixelColor(x, y, QColor(*rom.PALETTE[c1 + c2*2]))
-                for i in range(4):
-                    _x = x if (i % 2 == 0) else 7-x
-                    _y = y if (i // 2 == 0) else 15-y
-                    aimage[i].setPixelColor(_x, _y, QColor(*rom.PALETTE[c1 + c2*2], 0 if c1 + c2*2 == 0 else 255))
+                elif loadSprites:
+                    for i in range(4):
+                        _x = x if (i % 2 == 0) else 7-x
+                        _y = y if (i // 2 == 0) else 15-y
+                        aimage[i].setPixelColor(_x, _y, QColor(*rom.PALETTE[c1 + c2*2], 0 if c1 + c2*2 == 0 else 255))
         
-        self.tileset[destaddr] = image
-        for i in range(4):
-            self.spritetileset[i][destaddr] = aimage[i]
-        return image
+        if loadSprites:
+            for i in range(4):
+                self.spritetileset[i][destaddr] = aimage[i]
+        else:
+            self.tileset[destaddr] = image
         
     def getDefaultImage(self):
         return self.defimg
@@ -330,15 +334,16 @@ class VRam:
             for flip in range(4):
                 self.spritetileset[flip][i] = self.getDefaultImage()
         
-    def loadVramFromBuffer(self, buff):
+    def loadVramFromBuffer(self, buff, loadSprites):
         for entry in buff:
             destaddr = entry.destaddr
             srcaddr = entry.srcaddr
             for i in range(entry.destlen // 0x10):
-                self.loadVramTile(destaddr + i * 0x10, srcaddr + i * 0x10, entry.srcbank)
+                self.loadVramTile(destaddr + i * 0x10, srcaddr + i * 0x10, entry.srcbank, loadSprites)
         
-    def loadVramForStage(self, level, sublevel=0):
-        desc = f"l{level}s{sublevel}"
+    def loadVramForStage(self, level, sublevel=0, **kwargs):
+        loadSprites = kwargs.get("load_sprites", False)
+        desc = f"l{level}s{sublevel}{'-s' if loadSprites else ''}"
         if self.cached_vram_descriptor == desc:
             return
         self.cached_vram_descriptor = desc
@@ -349,12 +354,12 @@ class VRam:
         self.tileset[0x100] = QImage(QSize(8, 8), QImage.Format_RGB32)
         self.tileset[0x100].fill(Qt.white)
         
-        self.loadVramFromBuffer(self.j.tileset_common)
-        self.loadVramFromBuffer(self.j.levels[level].tileset)
+        self.loadVramFromBuffer(self.j.tileset_common, loadSprites)
+        self.loadVramFromBuffer(self.j.levels[level].tileset, loadSprites)
         for jsl in self.j.levels[level].sublevels[1:sublevel+1]:
             for tilePatch in jsl.tilePatches:
                 for i in range(tilePatch.count):
-                    self.loadVramTile(tilePatch.dst + 0x10 * i, tilePatch.source + i * 0x10, tilePatch.bank)
+                    self.loadVramTile(tilePatch.dst + 0x10 * i, tilePatch.source + i * 0x10, tilePatch.bank, loadSprites)
 
 def paintTile(painter, vram, x, y, tileidx, scale):
     x2 = x + scale * 8
@@ -647,7 +652,7 @@ class SpriteView(QWidget):
         scale = 4
         
         level, sublevel, screen = self.app.getLevel()
-        self.app.vram.loadVramForStage(level, sublevel)
+        self.app.vram.loadVramForStage(level, sublevel, load_sprites=True)
         
         painter = QPainter(self)
         painter.fillRect(QRect(0, 0, -bbx0*scale, -bby0*scale), self.bgcols[0])
