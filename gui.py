@@ -37,6 +37,11 @@ IO_OPEN = 0
 IO_SAVE = 1
 IO_SAVEAS = 2
 
+TAB_COMBO_LEVEL = 0
+TAB_COMBO_SUBLEVEL = 1
+TAB_COMBO_SCREEN = 2
+TAB_COMBO_SPRITE = 3
+
 DEFAULT_EMUPATH = ""
 # find an emulator
 
@@ -274,6 +279,7 @@ class VRam:
         self.j = j
         self.nes = nes
         self.tileset = [QImage(QSize(8, 8), QImage.Format_RGB32) for i in range(0x200)]
+        self.spritetileset = [[QImage(QSize(8, 16), QImage.Format_ARGB32) for i in range(0x200)] for flip in range(4)]
         self.defimg = QImage(QSize(8, 8), QImage.Format_RGB32)
         self.defimg.fill(QColor(0xff, 0x00, 0xff))
         self.cached_vram_descriptor = None
@@ -282,10 +288,14 @@ class VRam:
         if tileidx > 0x80:
             return self.tileset[tileidx]
         return self.tileset[0x100 + tileidx]
+    
+    def getVramSpriteTile(self, tileidx, flip=0):
+        return self.spritetileset[flip][tileidx]
         
     def loadVramTile(self, destaddr, srcaddr, srcbank):
         # create an 8x8 QImage with Format_RGB32
         image = QImage(QSize(8, 8), QImage.Format_RGB32)
+        aimage = [QImage(QSize(8, 16), QImage.Format_ARGB32) for i in range(4)]
         
         destaddr -= 0x8000
         destaddr //= 0x10
@@ -293,15 +303,22 @@ class VRam:
         def readbyte(srcbank, addr):
             return self.nes[0x4000 * srcbank + (addr)%0x4000]
 
-        for y in range(8):
+        for y in range(16):
             b1 = readbyte(srcbank, srcaddr + y*2)
             b2 = readbyte(srcbank, srcaddr + y*2 + 1)
             for x in range(8):
                 c1 = (b1 >> (7-x)) & 1
                 c2 = (b2 >> (7-x)) & 1
-                image.setPixelColor(x, y, QColor(*rom.PALETTE[c1 + c2*2]))
+                if y < 8:
+                    image.setPixelColor(x, y, QColor(*rom.PALETTE[c1 + c2*2]))
+                for i in range(4):
+                    _x = x if (i % 2 == 0) else 7-x
+                    _y = y if (i // 2 == 0) else 15-y
+                    aimage[i].setPixelColor(_x, _y, QColor(*rom.PALETTE[c1 + c2*2], 0 if c1 + c2*2 == 0 else 255))
         
         self.tileset[destaddr] = image
+        for i in range(4):
+            self.spritetileset[i][destaddr] = aimage[i]
         return image
         
     def getDefaultImage(self):
@@ -310,6 +327,8 @@ class VRam:
     def clearVram(self):
         for i in range(0x200):
             self.tileset[i] = self.getDefaultImage()
+            for flip in range(4):
+                self.spritetileset[flip][i] = self.getDefaultImage()
         
     def loadVramFromBuffer(self, buff):
         for entry in buff:
@@ -588,6 +607,61 @@ class SelectorPanel(QScrollArea):
         # we add 2 here because it inexplicably has a horizontal scroll if we don't
         self.setFixedWidth(scroll_area_widget.minimumSizeHint().width() + self.verticalScrollBar().sizeHint().width() + 2)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+class SpriteView(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.app = parent
+        self.bgcols = [QColor(200, 40, 200), QColor(150, 20, 180), QColor(200, 40, 200), QColor(150, 20, 180)]
+    
+    def _applySpritePatch(self, patch):
+        idx = self.app.sel_sprite
+        if idx in range(patch.startidx, patch.startidx + len(patch.sprites)):
+            sprite = patch.sprites[idx - patch.startidx]
+            self.tiles = copy.copy(sprite.tiles)
+        
+    def getSpriteTiles(self):
+        self.tiles = []
+        level, sublevel, screen = self.app.getLevel()
+        self.sprite = None
+        self._applySpritePatch(self.app.j.globalSpritePatches.init)
+        for sl in range(0, sublevel+1):
+            jsl = self.app.j.levels[level].sublevels[sl]
+            if "spritePatch" in jsl:
+                self._applySpritePatch(jsl.spritePatch)
+        
+    def _getbbox(self):
+        return \
+            min([tile.xoff for tile in self.tiles] + [-8]),   \
+            min([tile.yoff for tile in self.tiles] + [-8]),   \
+            max([tile.xoff+8 for tile in self.tiles] + [8]), \
+            max([tile.yoff+16 for tile in self.tiles] + [8]),
+        
+    def paintEvent(self, event):
+        self.getSpriteTiles()
+        bbx0, bby0, bbx1, bby1 = self._getbbox()
+        bbx0 -= 4
+        bby0 -= 4
+        bbx1 += 4
+        bby1 += 4
+        scale = 4
+        
+        level, sublevel, screen = self.app.getLevel()
+        self.app.vram.loadVramForStage(level, sublevel)
+        
+        painter = QPainter(self)
+        painter.fillRect(QRect(0, 0, -bbx0*scale, -bby0*scale), self.bgcols[0])
+        painter.fillRect(QRect(0, -bby0*scale, -bbx0*scale, bby1*scale), self.bgcols[1])
+        painter.fillRect(QRect(-bbx0*scale, -bby0*scale, bbx1*scale, bby1*scale), self.bgcols[2])
+        painter.fillRect(QRect(-bbx0*scale, 0, bbx1*scale, -bby0*scale), self.bgcols[3])
+        
+        for tile in self.tiles:
+            flags = 0 if not "flags" in tile else tile.flags
+            img = self.app.vram.getVramSpriteTile(tile.tidx, (flags >> 5) & 3)
+            painter.drawImage(
+                QRect(scale*(tile.xoff-bbx0), scale*(tile.yoff-bby0), 8*scale, 16*scale),
+                img
+            )
 
 class ScreenWidget(QWidget):
     def __init__(self, parent, restoreTab, entityAlpha=0.9, gridSpacing=8*4):
@@ -893,6 +967,7 @@ class MainWindow(QMainWindow):
         self.qcb_levels = []
         self.qcb_sublevels = []
         self.qcb_screens = []
+        self.qcb_sprites = []
         self.screenGrids = []
         self.screenTabs = []
         self.lastScreenTab = None
@@ -924,6 +999,7 @@ class MainWindow(QMainWindow):
         self.defineMenus()
         self.defineTabs()
         self.setGeometry(50, 50, 850, 550)
+        self.setSprite(7, True) # wall meat
         self.setLevel(3)
     
     def getLevel(self):
@@ -1000,13 +1076,14 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.onChangeTab)
         self.setCentralWidget(self.tabs)
         TAB_LABELS = [
-            "Layout", "Screen", "Entities", "Chunks", "Usage"
+            "Layout", "Screen", "Entities", "Chunks", *(["Sprites"] if rom.ROMTYPE in ["jp", "us"] else []), "Usage"
         ]
         TAB_DEFS = [
             self.defineLevelLayTab,
             self.defineScreenTab,
             self.defineEntityTab,
             self.defineChunksTab,
+            *([self.defineSpritesTab] if rom.ROMTYPE in ["jp", "us"] else []),
             self.defineUsageTab,
         ]
         for i, (label, define) in enumerate(zip(TAB_LABELS, TAB_DEFS)):
@@ -1014,9 +1091,15 @@ class MainWindow(QMainWindow):
             define(tab)
             self.tabs.addTab(tab, label)
     
+    def defineSpritesTab(self, tab):
+        self.spritesTab = tab
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL, TAB_COMBO_SPRITE])
+        self.spriteView = SpriteView(self)
+        vlay.addWidget(self.spriteView)
+    
     def defineLevelLayTab(self, tab):
         self.layTab = tab
-        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 1)
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL])
         hlay = QHBoxLayout()
         self.layGrid = RoomLayWidget(self)
         hlay.addWidget(self.layGrid)
@@ -1047,6 +1130,11 @@ class MainWindow(QMainWindow):
         self.sublevelStartYBox, chlay = self.addSpinBoxWithLabel("Start Y", 0, 15)
         self.sublevelStartYBox.valueChanged.connect(functools.partial(self.setSublevelProp, "starty"))
         cvlay.addLayout(chlay)
+        
+        self.sublevelTimerBox, chlay = self.addSpinBoxWithLabel("Time/10 s", 1, 99)
+        self.sublevelTimerBox.valueChanged.connect(functools.partial(self.setSublevelProp, "timer"))
+        cvlay.addLayout(chlay)
+        
         cvlay.addWidget(QWidget()) # padding
         hlay.addWidget(cvlayw)
         
@@ -1087,7 +1175,7 @@ class MainWindow(QMainWindow):
     def defineScreenTab(self, tab):
         self.screenGrids.append(ScreenTileWidget(self, tab))
         self.screenTabs.append(tab)
-        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 2)
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL, TAB_COMBO_SCREEN])
         hlay = QHBoxLayout()
         hlay.addWidget(self.screenGrids[-1])
         self.chunkSelectors.append(SelectorPanel(self, ChunkSelectorWidget))
@@ -1127,7 +1215,7 @@ class MainWindow(QMainWindow):
     def defineEntityTab(self, tab):
         self.screenTabs.append(tab)
         self.entityTab = tab
-        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 2)
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL, TAB_COMBO_SCREEN])
         hlay = QHBoxLayout()
         
         self.screenGrids.append(ScreenWidget(self, tab))
@@ -1238,7 +1326,7 @@ class MainWindow(QMainWindow):
                 # note that no path is provided, so it won't save to disk.
                 def threadRoutine():
                     regions, errors = model.saveRom(self.rom, copy.deepcopy(self.j))
-                    
+                    regions.sort(key=lambda region: -region.max)
                     #print("locking...")
                     with self.usageLock:
                         #print("locked.")
@@ -1253,7 +1341,7 @@ class MainWindow(QMainWindow):
         self.updateUsageLabel()
             
     def defineChunksTab(self, tab):
-        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, 0)
+        vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL])
         hlay = QHBoxLayout()
         
         # chunk selector
@@ -1284,29 +1372,29 @@ class MainWindow(QMainWindow):
         self.tileSelectors.append(SelectorPanel(self, TileSelectorWidget, 4, 0x4, 0x24, idxremap=lambda x: x if x < 0x80 else x+0x70))
         hlay.addWidget(self.tileSelectors[-1])
     
-    # depth=0: level only
-    # depth=1: level and sublevel
-    # depth=2: level, sublevel, screen
-    def defineWidgetLayoutWithLevelDropdown(self, w, depth=0):
+    def defineWidgetLayoutWithLevelDropdown(self, w, combos=[TAB_COMBO_LEVEL]):
         vlay = QVBoxLayout()
         hlay = QHBoxLayout()
         
         vlay.addLayout(hlay)
         
-        levelDropdown = QComboBox()
-        levelDropdown.addItems(["Plant Castle", "Crystal Castle", "Cloud Castle", "Rock Castle", "Dracula I", "Dracula II", "Dracula III"])
-        hlay.addWidget(levelDropdown)
-        levelDropdown.currentIndexChanged.connect(self.setLevel)
-        self.qcb_levels.append(levelDropdown)
+        assert(len(combos) > 0)
         
-        for i in range(1,depth+1):
+        for combo in combos:
             dropdown = QComboBox()
-            if i == 1:
+            if combo == TAB_COMBO_LEVEL:
+                dropdown.addItems(["Plant Castle", "Crystal Castle", "Cloud Castle", "Rock Castle", "Dracula I", "Dracula II", "Dracula III"])
+                dropdown.currentIndexChanged.connect(self.setLevel)
+                self.qcb_levels.append(dropdown)
+            if combo == TAB_COMBO_SUBLEVEL:
                 dropdown.currentIndexChanged.connect(self.setSublevel)
                 self.qcb_sublevels.append(dropdown)
-            if i == 2:
+            if combo == TAB_COMBO_SCREEN:
                 dropdown.currentIndexChanged.connect(self.setScreen)
                 self.qcb_screens.append(dropdown)
+            if combo == TAB_COMBO_SPRITE:
+                dropdown.currentIndexChanged.connect(self.setSprite)
+                self.qcb_sprites.append(dropdown)
             hlay.addWidget(dropdown)
         
         w.setLayout(vlay)
@@ -1621,6 +1709,7 @@ class MainWindow(QMainWindow):
         self.sublevelVerticalScrollingCheckbox.setCheckState(Qt.Checked if jsl.vertical == 1 else Qt.Unchecked)
         self.sublevelStartXBox.setValue(jsl.startx)
         self.sublevelStartYBox.setValue(jsl.starty)
+        self.sublevelTimerBox.setValue(jsl.timer)
         selCoords = self.sel_screencoords.get((level, sublevel), None)
         text = "(Select a screen.)"
         t = 0
@@ -1704,6 +1793,7 @@ class MainWindow(QMainWindow):
                 qcb.blockSignals(False)
         
         self.setScreen(self.sel_screen.get((self.sel_level, self.sel_sublevel[self.sel_level]), 0), True)
+        self.setSprite(self.sel_sprite, False)
         
         self.updateLay()
         
@@ -1715,6 +1805,20 @@ class MainWindow(QMainWindow):
         
     def redo(self):
         self.undoBuffer.redo()
+        
+    def setSprite(self, sprite, resetItems=False):
+        sender = self.sender()
+        sprites = [f"Sprite ${i:02X}" for i in range(0x80)]
+        self.sel_sprite = sprite
+        for qcb in self.qcb_sprites:
+            if qcb != sender:
+                qcb.blockSignals(True)
+                if resetItems:
+                    qcb.clear()
+                    qcb.addItems(sprites)
+                qcb.setCurrentIndex(sprite)
+                qcb.blockSignals(False)
+        self.spriteView.update()
         
     def setScreen(self, screen, sublevelChanged=False):
         sender = self.sender()
@@ -1774,7 +1878,7 @@ class MainWindow(QMainWindow):
                 selector.ensureWidgetVisible(selector.widgets[chunk])
     
     def onAbout(self):
-        text = f"Developed by NaOH in March 2023 (cc-by-nc-sa v3.0).\n\nCreative Commons Licensed — use this program for any non-commercial means however you like, but please credit the author. Source available at https://github.com/nstbayless/cv2br-editor\n\nSpecial thanks to Spriven."
+        text = f"Developed by NaOH in March 2023 (cc-by-nc-sa v3.0), with contributions by Julien Neel.\n\nCreative Commons Licensed — use this program for any non-commercial means however you like, but please credit the author. Source available at https://github.com/nstbayless/cv2br-editor\n\nSpecial thanks to Spriven."
         text += "\n\nPlease support Konami."
         QMessageBox.information(
             self,
@@ -1907,28 +2011,38 @@ class MainWindow(QMainWindow):
                 with open(path, "w") as f:
                     json.dump(self.j, f, ensure_ascii=False, indent=4)
 
-if "--help" in sys.argv:
+if "--help" in sys.argv or "-h" in sys.argv:
     print(f"{APPNAME}")
+    print(f"{sys.argv[0]} [--base=/path/to/base.gb]")
     sys.exit(0)
 
 app = QApplication(sys.argv)
 
 base = None
 multibase = False
-for candidate in ["base.gb", "base-us.gb", "base-kgbc4eu.gb", "base-jp.gb"]:
-    if os.path.exists(os.path.join(guipath, candidate)):
-        base = os.path.join(guipath, candidate)
-        break
-else:
-    candidates = glob.glob(os.path.join(guipath, "*.gb"))
-    if len(candidates) == 1:
-        base = candidates[0]
-    elif len(candidates) == 0:
-        candidates = glob.glob("*.gb")
+
+for s in sys.argv:
+    if s.startswith("--base="):
+        base = s[7:]
+        if not os.path.exists(base):
+            print(f"not found: {base}")
+            sys.exit(1)
+
+if base is None:            
+    for candidate in ["base.gb", "base-us.gb", "base-kgbc4eu.gb", "base-jp.gb"]:
+        if os.path.exists(os.path.join(guipath, candidate)):
+            base = os.path.join(guipath, candidate)
+            break
+    else:
+        candidates = glob.glob(os.path.join(guipath, "*.gb"))
         if len(candidates) == 1:
             base = candidates[0]
-    if len(candidates) > 1:
-        multibase = True
+        elif len(candidates) == 0:
+            candidates = glob.glob("*.gb")
+            if len(candidates) == 1:
+                base = candidates[0]
+        if len(candidates) > 1:
+            multibase = True
 
 if base is None:
     text = f"Place a gameboy rom in the {APPNAME} directory to automatically load a ROM on startup. Alternatively, select one now."

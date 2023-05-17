@@ -381,8 +381,6 @@ def readrom(_data):
     global ENTGFXLOAD_BANK
     ENTGFXLOAD_BANK = 0
     ENTGFXLOAD = 0x0e4c
-    global SUB0_TILE_PATCH
-    SUB0_TILE_PATCH = 0x2b28
     
     global LEVEL_START_2855
     global LEVEL_START_28DB
@@ -401,9 +399,9 @@ def readrom(_data):
     LOADGFX_DETOUR_BANK = 3
     LOADGFX_DETOUR = 0x7664
     global SUBLEVEL_TILES_PATCH_TABLE
-    SUBLEVEL_TILES_PATCH_TABLE = 0x3382 # TODO: localized
+    SUBLEVEL_TILES_PATCH_TABLE = 0x3382 # TODO: kgbc4eu
     global TILES_PATCH_LIST
-    TILES_PATCH_LIST = 0x3401 # TODO: localized
+    TILES_PATCH_LIST = 0x3401 # TODO: kgbc4eu
 
     # bank2
     global BANK2
@@ -440,10 +438,10 @@ def readrom(_data):
     VRAM_SPECIAL_ROUTINES_END=0x7768
     global SPRITE_PATCH_TABLE
     global LOAD_SPRITES_ROUTINES
-    SPRITE_PATCH_TABLE = 0x7059 # TODO: localized
-    LOAD_SPRITES_ROUTINES = 0x6fef # TODO: localized
+    SPRITE_PATCH_TABLE = 0x7059 # TODO: kgbc4eu
+    LOAD_SPRITES_ROUTINES = 0x6fef # TODO: kgbc4eu
     global LEVEL_TIMER_TABLE
-    LEVEL_TIMER_TABLE = 0x77f0 # TODO: localized
+    LEVEL_TIMER_TABLE = 0x77E0
 
     # bank6
     global BANK6
@@ -502,6 +500,7 @@ def readrom(_data):
         LOAD_LAYOUT_500B = 0x50b3
         ENTGFXLOAD = None
         TITLE_DISPLAY = None
+        LEVEL_TIMER_TABLE = 0x7cfa
 
     global LEVTAB_A, LEVTAB_B, LEVTAB_C, LEVELS, SUBSTAGECOUNT, Entities
     LEVTAB_A = readword(BANK, LEVTAB_ROUTINE + 4)

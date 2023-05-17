@@ -72,6 +72,7 @@ def loadRom(path):
         j.VERSION=VERSION_INT
         j.tileset_common = getTilesetAtAddr(rom.LEVEL_TILESET_TABLE_BANK, rom.LEVEL_TILESET_COMMON)
         j.screenTilesAddr = rom.readtableword(rom.BANK2, rom.LEVTAB_TILES_BANK2, 1, 0)
+        loadGlobalSpritePatches(j)
         j.levels = []
         for i, levelname in enumerate(rom.LEVELS):
             jl = JSONDict()
@@ -124,8 +125,12 @@ def readSprite(bank, addr):
             addr += 1
     return jsprite, addr
 
+# each sublevel (other than 0) edits/patches a portion of the vram tile palette
+# we presume this is only to change the sprites available
 def loadSublevelTilesPatch(j, level, sublevel):
     assert sublevel >= 1, "sublevel 0 does not patch tiles"
+    if rom.ROMTYPE not in ["us", "jp"]:
+        return
     jl = j.levels[level]
     jsl = jl.sublevels[sublevel]
     bank = 0
@@ -145,6 +150,8 @@ def loadSublevelTilesPatch(j, level, sublevel):
 
 # each sublevel edits/patches a portion of the sprite lookup table, which is at $DF00-$DFFF in WRAM.
 def loadSublevelSpritesPatch(j, level, sublevel):
+    if rom.ROMTYPE not in ["us", "jp"]:
+        return
     jl = j.levels[level]
     jsl = jl.sublevels[sublevel]
     bank = rom.BANK3
@@ -163,7 +170,6 @@ def loadSublevelSpritesPatch(j, level, sublevel):
             jsl.spritePatch.sprites.append(sprite)
 
 def readSpritePatchRoutine(bank, addr):
-    jpatch = JSONDict()
     # ld hl, xxxx
     source = rom.readword(bank, addr+1)
     addr += 3
@@ -175,12 +181,26 @@ def readSpritePatchRoutine(bank, addr):
     # ld b, xx
     count = rom.readbyte(bank, addr+1)
     
+    assert(count > 0)
+    
+    jpatch = JSONDict({
+        "startidx": start,
+        "sprites": []
+    })
+    
+    for i in range(count):
+        ptr = rom.readword(bank, source + 2*i)
+        sprite, end = readSprite(bank, ptr)
+        jpatch.sprites.append(sprite)
+    
     # (jr $7048)
     return jpatch
     
 def loadGlobalSpritePatches(j):
     bank = rom.BANK3
     addr = rom.LOAD_SPRITES_ROUTINES
+    if rom.ROMTYPE not in ["us", "jp"]:
+        return
     j.globalSpritePatches = JSONDict({
         "init": readSpritePatchRoutine(bank, addr),
         "title": readSpritePatchRoutine(bank, addr+9),
@@ -692,6 +712,12 @@ class SaveContext:
                 "addr": rom.CRUSHER_ROUTINE,
                 "bank": rom.CRUSHER_ROUTINE_BANK,
             },
+            "SublevelTime": {
+                "shortname": "ST",
+                "max": 0x31,
+                "addr": rom.LEVEL_TIMER_TABLE,
+                "bank": rom.BANK3
+            }
         })
         for key in self.regions.keys():
             self.regions[key] = JSONDict(self.regions[key])
@@ -796,6 +822,7 @@ def writeRom(ctx: SaveContext):
     constructScreenRemapping(ctx)
     writeScreenTiles(ctx)
     writeScreenLayout(ctx)
+    writeSublevelTimer(ctx)
     writeSublevelVertical(ctx)
     writeEntities(ctx)
     writeChunks(ctx)
@@ -1158,12 +1185,28 @@ def writeScreenLayout(ctx: SaveContext):
 def rrange(a, b):
     return range(b-1,a-1,-1)
 
+def writeLevelTableData(ctx: SaveContext, addr, bank, cb, **kwargs):
+    taddr = addr
+    addr += len(ctx.j.levels)*2
+    
+    for level, jl in enumerate(ctx.j.levels):
+        if level == 0:
+            taddr += 2
+        else:
+            ctx.writeWord(bank, taddr, addr)
+            taddr += 2
+            v = cb(ctx, level, addr)
+            for byte in v:
+                ctx.writeByte(bank, addr, byte)
+                addr += 1
+    return addr
+
 def writeSublevelTableData(ctx: SaveContext, addr, bank, cb, **kwargs):
     allowMerging = kwargs.get("allowMerging", False)
     tableAtStart = kwargs.get("tableAtStart", False)
     sbbase = kwargs.get("singleByteAddressBase", None)
     taddr = addr
-    addr += 8*2
+    addr += len(ctx.j.levels)*2
     
     if tableAtStart:
         tsaddr = addr
@@ -1216,6 +1259,20 @@ def writeSublevelTableData(ctx: SaveContext, addr, bank, cb, **kwargs):
                     ctx.writeByte(bank, addr, b)
                     addr += 1
     return addr
+
+def writeSublevelTimer(ctx: SaveContext):
+    if rom.ROMTYPE != "us":
+        return
+    
+    bank = ctx.regions.SublevelTime.bank
+    addr = ctx.regions.SublevelTime.addr
+    
+    addr = writeLevelTableData(
+        ctx, addr, bank,
+        lambda ctx, level, addr: [sublevel.timer for sublevel in ctx.j.levels[level].sublevels]
+    )
+    
+    ctx.regions.SublevelTime.used = addr - ctx.regions.SublevelTime.addr
 
 def writeSublevelVertical(ctx: SaveContext):
     # the old routine at 2:4316 was too restrictive and compressed.
@@ -1804,7 +1861,6 @@ def writeEntLoadRoutine(ctx, region, routines, ret=True, **kwargs):
             addr += 1
     
     region.used = addr - region.addr
-    
 
 def produceSublevelInitRoutine(ctx, level, sublevel, addr):
     # this is quite spaghetti.
