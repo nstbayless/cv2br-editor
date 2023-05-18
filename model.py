@@ -106,6 +106,7 @@ def loadRom(path):
 # also returns the address of the end of the sprite
 def readSprite(bank, addr):
     jsprite = JSONDict({
+        "srcAddr": f"{bank:X}:{addr:04X}",
         "tileCount": rom.readbyte(bank, addr),
         "tiles": []
     })

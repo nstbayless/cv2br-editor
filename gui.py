@@ -617,18 +617,22 @@ class SpriteView(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.app = parent
-        self.bgcols = [QColor(200, 40, 200), QColor(150, 20, 180), QColor(200, 40, 200), QColor(150, 20, 180)]
+        self.bgcols = [QColor(250, 100, 250), QColor(190, 80, 220)]
     
     def _applySpritePatch(self, patch):
         idx = self.app.sel_sprite
         if idx in range(patch.startidx, patch.startidx + len(patch.sprites)):
             sprite = patch.sprites[idx - patch.startidx]
             self.tiles = copy.copy(sprite.tiles)
+            self.srcAddr = sprite.srcAddr
         
     def getSpriteTiles(self):
         self.tiles = []
         level, sublevel, screen = self.app.getLevel()
         self.sprite = None
+        
+        # TODO: cache
+        
         self._applySpritePatch(self.app.j.globalSpritePatches.init)
         for sl in range(0, sublevel+1):
             jsl = self.app.j.levels[level].sublevels[sl]
@@ -657,8 +661,8 @@ class SpriteView(QWidget):
         painter = QPainter(self)
         painter.fillRect(QRect(0, 0, -bbx0*scale, -bby0*scale), self.bgcols[0])
         painter.fillRect(QRect(0, -bby0*scale, -bbx0*scale, bby1*scale), self.bgcols[1])
-        painter.fillRect(QRect(-bbx0*scale, -bby0*scale, bbx1*scale, bby1*scale), self.bgcols[2])
-        painter.fillRect(QRect(-bbx0*scale, 0, bbx1*scale, -bby0*scale), self.bgcols[3])
+        painter.fillRect(QRect(-bbx0*scale, -bby0*scale, bbx1*scale, bby1*scale), self.bgcols[0])
+        painter.fillRect(QRect(-bbx0*scale, 0, bbx1*scale, -bby0*scale), self.bgcols[1])
         
         for tile in self.tiles:
             flags = 0 if not "flags" in tile else tile.flags
@@ -1004,8 +1008,9 @@ class MainWindow(QMainWindow):
         self.defineMenus()
         self.defineTabs()
         self.setGeometry(50, 50, 850, 550)
-        self.setSprite(7, True) # wall meat
+        self.sel_sprite = 7
         self.setLevel(3)
+        self.setSprite(self.sel_sprite, True) # wall meat
     
     def getLevel(self):
         return self.sel_level, self.sel_sublevel.get(self.sel_level, 0), self.sel_screen.get((self.sel_level, self.sel_sublevel[self.sel_level]), 0)
@@ -1099,8 +1104,19 @@ class MainWindow(QMainWindow):
     def defineSpritesTab(self, tab):
         self.spritesTab = tab
         vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL, TAB_COMBO_SPRITE])
+        hlay = QHBoxLayout()
         self.spriteView = SpriteView(self)
-        vlay.addWidget(self.spriteView)
+        hlay.addWidget(self.spriteView)
+        
+        self.spriteLabel = QLabel()
+        spriteLabelScroll = QScrollArea()
+        spriteLabelScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        spriteLabelScroll.setWidgetResizable(True)
+        spriteLabelScroll.setWidget(self.spriteLabel)
+        spriteLabelScroll.setMaximumWidth(300)
+        hlay.addWidget(spriteLabelScroll)
+        
+        vlay.addLayout(hlay)
     
     def defineLevelLayTab(self, tab):
         self.layTab = tab
@@ -1824,6 +1840,15 @@ class MainWindow(QMainWindow):
                 qcb.setCurrentIndex(sprite)
                 qcb.blockSignals(False)
         self.spriteView.update()
+        self.spriteView.getSpriteTiles() # refresh sprite
+        
+        sltext = f"Sprite Address: {self.spriteView.srcAddr}"
+        jl, jsl, js = self.getLevelJ()
+        if "spritePatch" in jsl:
+            sltext += f"\nSublevel sprite patch: ${jsl.spritePatch.startidx:02X}-${len(jsl.spritePatch.sprites)+jsl.spritePatch.startidx-1:02X}"
+            for i, sprite in enumerate(jsl.spritePatch.sprites):
+                sltext += f"\n - ${i+jsl.spritePatch.startidx:02X} <- {sprite.srcAddr}"
+        self.spriteLabel.setText(sltext)
         
     def setScreen(self, screen, sublevelChanged=False):
         sender = self.sender()
