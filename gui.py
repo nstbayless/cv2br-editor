@@ -137,6 +137,25 @@ class FilePathSelector(QWidget):
             if len(selected_files) > 0:
                 self._path_edit.setText(selected_files[0])
 
+class List2DHelper:
+    def __init__(self, getData, offset):
+        self.getData = getData
+        self.offset = offset
+    
+    def __getitem__(self, index):
+        return self.getData()[self.offset+index]
+    
+    def __setitem__(self, index, value):
+        self.getData()[self.offset+index] = value
+
+class List2D:
+    def __init__(self, getData, width):
+        self.getData = getData
+        self.width = width
+    
+    def __getitem__(self, index):
+        return List2DHelper(self.getData, index*self.width)
+
 class UsageBar(QWidget):
     def __init__(self, label=None, shortname=None):
         super().__init__()
@@ -673,8 +692,9 @@ class SpriteView(QWidget):
             )
 
 class ScreenWidget(QWidget):
-    def __init__(self, parent, restoreTab, entityAlpha=0.9, gridSpacing=8*4):
+    def __init__(self, parent, restoreTab, specialScreens=False, entityAlpha=0.9, gridSpacing=8*4):
         super().__init__(parent)
+        self.specialScreens=specialScreens
         self.restoreTab = restoreTab
         self.app = parent
         self.hoverPos = None
@@ -746,7 +766,7 @@ class ScreenWidget(QWidget):
         #painter.setRenderHint(QPainter.Antialiasing)
         
         level, sublevel, screen = self.app.getLevel()
-        jl, jsl, js = self.app.getLevelJ()
+        data = self.app.getSpecialScreenData(self.specialScreens)
         chunks = model.getLevelChunks(self.app.j, level)
         
         vram = self.app.vram
@@ -754,7 +774,7 @@ class ScreenWidget(QWidget):
         
         for i in range(5):
             for j in range(4):
-                chidx = js.data[j][i]
+                chidx = data[j][i]
                 chunk = chunks[chidx] if chidx < len(chunks) else [-1] * 0x10
                 for ci in range(4):
                     for cj in range(4):
@@ -767,28 +787,36 @@ class ScreenWidget(QWidget):
             self.paintEntities(painter)
 
 class ScreenTileWidget(ScreenWidget):
-    def __init__(self, parent, restoreTab):
-        super().__init__(parent, restoreTab, 0)
+    def __init__(self, parent, restoreTab, specialScreens=True):
+        super().__init__(parent, restoreTab, specialScreens, 0)
     
     def mousePressEvent(self, event):
         self.mouseMoveEvent(event)
         chidx = self.app.chunkSelected.get(self.app.sel_level, None)
         level, sublevel, screen = self.app.getLevel()
         jl, jsl, js = self.app.getLevelJ()
+        data = self.app.getSpecialScreenData(self.specialScreens)
         if self.hoverPos is not None:
             i, j = self.hoverPos
-            prev = js.data[j][i]
+            prev = data[j][i]
             if event.button() == Qt.LeftButton and chidx is not None:
                 if prev != chidx:
-                    self.app.undoBuffer.push(
-                        lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, chidx),
-                        lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, prev),
-                        self.getRestoreContext()
-                    )
+                    if data == js.data:
+                        self.app.undoBuffer.push(
+                            lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, chidx),
+                            lambda app: lset(app.j.levels[level].sublevels[sublevel].screens[screen].data[j], i, prev),
+                            self.getRestoreContext()
+                        )
+                    else:
+                        # TODO: undo buffer for special screens
+                        # (need to modify restore context)
+                        print("WARNING: undo buffer support not available for special screens.")
+                        data[j][i] = chidx
+                        pass
             elif event.button() == Qt.RightButton:
                 self.app.setChunk(None)
             elif event.button() == Qt.MiddleButton:
-                self.app.setChunk(js.data[j][i])
+                self.app.setChunk(data[j][i])
         self.update()
         
     def paintEvent(self, event):
@@ -797,9 +825,6 @@ class ScreenTileWidget(ScreenWidget):
         squareSize = self.getScale()
         
         level, sublevel, screen = self.app.getLevel()
-        jl = self.app.j.levels[level]
-        jsl = jl.sublevels[sublevel]
-        screen = jsl.screens[screen]
         chunks = model.getLevelChunks(self.app.j, level)
         
         chidx = self.app.chunkSelected.get(self.app.sel_level, None)
@@ -972,6 +997,7 @@ class MainWindow(QMainWindow):
         self.sel_level = 1 # plant=1 index
         self.sel_sublevel = {}
         self.sel_screen = {}
+        self.sel_special_screen = {}
         self.sel_screencoords = {}
         self.qcb_levels = []
         self.qcb_sublevels = []
@@ -1021,6 +1047,17 @@ class MainWindow(QMainWindow):
         jsl = jl.sublevels[sublevel]
         js = jsl.screens[screen]
         return jl, jsl, js
+    
+    def getSpecialScreenData(self, specScreensOk=True):
+        level, sublevel, screen = self.getLevel()
+        jl, jsl, js = self.getLevelJ()
+        special_screen = self.sel_special_screen.get((level, sublevel), False)
+        if specScreensOk:
+            if special_screen is not False:
+                specscreens = self.getSpecialScreens()
+                if special_screen < len(specscreens):
+                    return specscreens[special_screen].data
+        return js.data
 
     def defineActions(self):
         self.actLoad = QAction("&Open Hack...", self)
@@ -1197,6 +1234,7 @@ class MainWindow(QMainWindow):
         self.screenGrids.append(ScreenTileWidget(self, tab))
         self.screenTabs.append(tab)
         vlay = self.defineWidgetLayoutWithLevelDropdown(tab, [TAB_COMBO_LEVEL, TAB_COMBO_SUBLEVEL, TAB_COMBO_SCREEN])
+        self.qcb_screentab_screen = self.qcb_screens[-1]
         hlay = QHBoxLayout()
         hlay.addWidget(self.screenGrids[-1])
         self.chunkSelectors.append(SelectorPanel(self, ChunkSelectorWidget))
@@ -1856,15 +1894,28 @@ class MainWindow(QMainWindow):
         
         # TODO: if there is only 1 copy of the screen, set screencoords to its coords
         self.sel_screencoords[(level, sublevel)] = None
-        self.sel_screen[(level, sublevel)] = screen
         screens = [f"{'* ' if not model.screenUsed(self.j, level, sublevel, i) else ''}Screen ${i:X}" for i, sc in enumerate(self.j.levels[level].sublevels[sublevel].screens)]
+        if screen >= len(screens):
+            self.sel_special_screen[(level, sublevel)] = screen - len(screens)
+        else:
+            self.sel_special_screen[(level, sublevel)] = False
+            self.sel_screen[(level, sublevel)] = screen
+        screens_and_special_screens = screens + [f"Special ${i:X}" if "name" not in ss else ss.name for i,ss in enumerate(self.getSpecialScreens())]
         for qcb in self.qcb_screens:
             if qcb != sender:
                 qcb.blockSignals(True)
-                if sublevelChanged:
-                    qcb.clear()
-                    qcb.addItems(screens)
-                qcb.setCurrentIndex(screen)
+                
+                if qcb == self.qcb_screentab_screen: 
+                    if sublevelChanged:
+                        qcb.clear()
+                        qcb.addItems(screens_and_special_screens)
+                    qcb.setCurrentIndex(screen)
+                else:
+                    if sublevelChanged:
+                        qcb.clear()
+                        qcb.addItems(screens)
+                    qcb.setCurrentIndex(self.sel_screen[(level, sublevel)])
+                    
                 qcb.blockSignals(False)
         
         for widget in self.screenGrids:
@@ -2040,6 +2091,21 @@ class MainWindow(QMainWindow):
             elif mode in [IO_SAVE, IO_SAVEAS]:
                 with open(path, "w") as f:
                     json.dump(self.j, f, ensure_ascii=False, indent=4)
+    
+    def getSpecialScreens(self, level=None, sublevel=None):
+        # gets special screens for this (level, sublevel)
+        if level == None or sublevel == None:
+            level, sublevel, screen = self.getLevel()
+        jl, jsl, js = self.getLevelJ()
+        
+        specscreens = []
+        
+        if "initRoutines" in jsl:
+            for i,initRoutine in enumerate(jsl.initRoutines):
+                if initRoutine.type == "SCREEN":
+                    specscreens.append(model.JSONDict(data=List2D(lambda: jsl.initRoutines[i].data, 5)))
+            
+        return specscreens
 
 if "--help" in sys.argv or "-h" in sys.argv:
     print(f"{APPNAME}")
