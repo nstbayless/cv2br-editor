@@ -22,6 +22,7 @@ import tempfile
 import subprocess
 import re
 import shutil
+from sprites import *
 
 try:
     # (incantation)
@@ -641,7 +642,8 @@ class SpriteView(QWidget):
     def _applySpritePatch(self, patch):
         idx = self.app.sel_sprite
         if idx in range(patch.startidx, patch.startidx + len(patch.sprites)):
-            sprite = patch.sprites[idx - patch.startidx]
+            self.spriteName = patch.sprites[idx - patch.startidx]
+            sprite = self.app.j.sprites[self.spriteName]
             self.tiles = copy.copy(sprite.tiles)
             self.srcAddr = sprite.srcAddr
         
@@ -1867,7 +1869,10 @@ class MainWindow(QMainWindow):
         
     def setSprite(self, sprite, resetItems=False):
         sender = self.sender()
-        sprites = [f"Sprite ${i:02X}" for i in range(0x80)]
+        jl, jsl, js = self.getLevelJ()
+        def getSpriteLabel(i):
+            return f"Sprite ${i:02X}"
+        sprites = [getSpriteLabel(i) for i in range(0x80)]
         self.sel_sprite = sprite
         for qcb in self.qcb_sprites:
             if qcb != sender:
@@ -1880,12 +1885,12 @@ class MainWindow(QMainWindow):
         self.spriteView.update()
         self.spriteView.getSpriteTiles() # refresh sprite
         
-        sltext = f"Sprite Address: {self.spriteView.srcAddr}"
-        jl, jsl, js = self.getLevelJ()
+        sltext = self.spriteView.spriteName
+        sltext += f"\nSprite Address: {self.spriteView.srcAddr}"
         if "spritePatch" in jsl:
             sltext += f"\nSublevel sprite patch: ${jsl.spritePatch.startidx:02X}-${len(jsl.spritePatch.sprites)+jsl.spritePatch.startidx-1:02X}"
             for i, sprite in enumerate(jsl.spritePatch.sprites):
-                sltext += f"\n - ${i+jsl.spritePatch.startidx:02X} <- {sprite.srcAddr}"
+                sltext += f"\n - ${i+jsl.spritePatch.startidx:02X} <- {self.j.sprites[sprite].srcAddr}"
         self.spriteLabel.setText(sltext)
         
     def setScreen(self, screen, sublevelChanged=False):

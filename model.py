@@ -1,11 +1,12 @@
 import rom
 from rom import readword, readtablebyte, readtableword, readbyte
+from sprites import SPRITE_NAMES
 import copy
 import traceback
 import hashlib
 
-VERSION_INT=2023041819
-VERSION_NAME="v1.3"
+VERSION_INT=2025021616
+VERSION_NAME="v1.4"
 
 def flatten(l):
     a = []
@@ -62,8 +63,6 @@ class JSONDict(dict):
         else:
             self[attr] = value
     
-    
-
 # returns a pair: gb: bytes, data: JSONDict
 def loadRom(path):
     with open(path, "rb") as f:
@@ -97,6 +96,7 @@ def loadRom(path):
                     loadSublevelSpritesPatch(j, i, sublevel)
                     if sublevel >= 1:
                         loadSublevelTilesPatch(j, i, sublevel)
+        reindexSpritesByName(j)
         j.entC4Routine = loadInitRoutine(j, rom.ENT4C_FLICKER_ROUTINE_BANK, rom.ENT4C_FLICKER_ROUTINE, maxAddr = rom.ENT4C_FLICKER_ROUTINE_END)
         j.ent78Routine = loadInitRoutine(j, rom.ENT78_FLICKER_ROUTINE_BANK, rom.ENT78_FLICKER_ROUTINE, maxaddr=rom.ENT78_FLICKER_ROUTINE_END)
         j.crusherRoutine = loadInitRoutine(j, rom.CRUSHER_ROUTINE_BANK, rom.CRUSHER_ROUTINE, maxaddr=rom.CRUSHER_ROUTINE_END)
@@ -169,6 +169,56 @@ def loadSublevelSpritesPatch(j, level, sublevel):
             ptr = rom.readword(bank, source + 2*i)
             sprite, end = readSprite(bank, ptr)
             jsl.spritePatch.sprites.append(sprite)
+
+# we name all the sprites, to identify them better;
+# sublevel sprite patches are changed to refer to names, which 
+# are then looked up in j.sprites to find the data
+def reindexSpritesByName(j):
+    addr2sprite = {}
+    j.sprites = JSONDict()
+    for sprdef in SPRITE_NAMES:
+        name = sprdef["name"]
+        idx = sprdef["idx"]
+        level = sprdef["level"] if "level" in sprdef else None
+        levelidx = rom.LEVELS.index(level) if level else 0
+        jl = j.levels[levelidx]
+        sublevelidx = sprdef["sublevel"] if "sublevel" in sprdef else None
+        patch = None
+        def sourcePatch(_patch):
+            nonlocal patch
+            if idx >= _patch.startidx and idx < _patch.startidx + len(_patch.sprites):
+                patch = _patch
+        sourcePatch(j.globalSpritePatches.init)
+        sourcePatch(j.globalSpritePatches.title)
+        if "sublevels" in jl:
+            for i, jsl in enumerate(jl.sublevels[:sublevelidx]):
+                if "spritePatch" in jsl:
+                    sourcePatch(jsl.spritePatch)
+        if not patch:
+            assert False, f"can't source sprite for \"{name}\""
+        else:
+            sprite = patch.sprites[idx - patch.startidx]
+            srcAddr = sprite.srcAddr
+            addr2sprite[srcAddr] = name
+            j.sprites[name] = sprite
+        
+    # replace sprites in all patches with name
+    def makeSpritePatchIndirect(patch, context):
+        for i, sprite in enumerate(patch.sprites):
+            if not sprite.srcAddr in addr2sprite:
+                name = "unk_" + str.replace(sprite.srcAddr, ":", "_")
+                addr2sprite[sprite.srcAddr] = name
+                j.sprites[name] = sprite
+            patch.sprites[i] = addr2sprite[sprite.srcAddr]
+    
+    makeSpritePatchIndirect(j.globalSpritePatches.init, "init")
+    makeSpritePatchIndirect(j.globalSpritePatches.title, "title")
+    makeSpritePatchIndirect(j.globalSpritePatches.unk2, "unk2")
+    makeSpritePatchIndirect(j.globalSpritePatches.unk3, "unk3")
+    for jl in j.levels[1:]:
+        for slidx, jsl in enumerate(jl.sublevels):
+            if "spritePatch" in jsl:
+                makeSpritePatchIndirect(jsl.spritePatch, jl.name + ".sub" + str(slidx))
 
 def readSpritePatchRoutine(bank, addr):
     # ld hl, xxxx
